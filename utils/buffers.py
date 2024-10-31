@@ -37,7 +37,7 @@ class ReplayBuffer:
     ):
         if device == "cpu":
             pin_memory = False
-            logger.info(f"On CPU so setting pin_memory=False")
+            logger.info("On CPU so setting pin_memory=False")
 
         self.nstep = nstep
         self.gamma = gamma

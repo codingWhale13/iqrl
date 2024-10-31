@@ -91,7 +91,7 @@ def cluster_safe_train(cfg: TrainConfig):
         traceback.print_exc(file=sys.stderr)
         raise
     finally:
-        # fflush everything
+        # flush everything
         sys.stdout.flush()
         sys.stderr.flush()
 
