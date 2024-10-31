@@ -4,7 +4,7 @@ from typing import NamedTuple, Optional
 
 import torch
 from tensordict import TensorDict
-from torchrl.data import ReplayBuffer as TorchRLReplayBuffer
+from torchrl.data import ReplayBuffer as TorchRLReplayBuffer, ReplayBufferEnsemble
 from torchrl.data.replay_buffers import LazyMemmapStorage
 from torchrl.data.replay_buffers.samplers import SliceSampler
 
@@ -29,6 +29,7 @@ class ReplayBuffer:
         self,
         buffer_size: int,
         batch_size: int,
+        buffer_count: int = 1,
         nstep: int = 1,
         gamma: float = 0.99,
         prefetch: int = 10,
@@ -39,6 +40,8 @@ class ReplayBuffer:
             pin_memory = False
             logger.info("On CPU so setting pin_memory=False")
 
+        self.batch_size = batch_size
+        self.buffer_count = buffer_count
         self.nstep = nstep
         self.gamma = gamma
         self.sampler = SliceSampler(
@@ -47,18 +50,34 @@ class ReplayBuffer:
             traj_key=("collector", "traj_ids"),
             truncated_key=None,
         )
-        self.rb = TorchRLReplayBuffer(
-            storage=LazyMemmapStorage(buffer_size, device=device),
-            pin_memory=pin_memory,
-            sampler=self.sampler,
-            prefetch=prefetch,
-            batch_size=batch_size * nstep,
-            # transform=MultiStepTransform(n_steps=3, gamma=0.95),
-        )
-        self.batch_size = batch_size
+        # Instantiate buffer_count many simple replay buffers
+        rbs = [
+            TorchRLReplayBuffer(
+                storage=LazyMemmapStorage(buffer_size, device=device),
+                pin_memory=pin_memory,
+                sampler=self.sampler,
+                prefetch=prefetch,
+                batch_size=batch_size * nstep,
+            )
+            for _ in range(buffer_count)
+        ]
+
+        if self.buffer_count == 1:
+            # Single-task behaviour: no need for ReplayBufferEnsemble
+            self.rb == rbs[0]
+        else:
+            self.rb = ReplayBufferEnsemble(
+                *rbs, batch_size=batch_size * nstep, sample_from_all=True
+            )
 
     def extend(self, data):
-        self.rb.extend(data.cpu())
+        if self.buffer_count == 1:
+            # Single-task behaviour: data has no batch dimension
+            self.rb.extend(data.cpu())
+        else:
+            assert data.shape[0] == self.buffer_count
+            for i in range(self.buffer_count):
+                self.rb[i].extend(data[i].cpu())
 
     def sample(
         self, return_nstep: bool = False, batch_size: Optional[int] = None
@@ -87,7 +106,7 @@ class ReplayBuffer:
             return to_nstep(batch, nstep=self.nstep, gamma=self.gamma)
 
     def _sample(self) -> TensorDict:
-        batch = self.rb.sample().view(-1, self.nstep).transpose(0, 1)
+        batch = self.rb.sample().reshape(-1, self.nstep).transpose(0, 1)
         next_state_gammas = torch.ones_like(
             batch["next"]["done"][..., 0], dtype=torch.float32
         )
