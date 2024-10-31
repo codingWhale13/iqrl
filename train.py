@@ -204,7 +204,7 @@ def train(cfg: TrainConfig):
     print(colored("Learnable parameters:", "green", attrs=["bold"]), f"{total_params}M")
     print(colored("Architecture:", "green", attrs=["bold"]), agent)
 
-    def evaluate(step: int) -> dict:
+    def evaluate(step: int, episode_idx: int) -> dict:
         """Evaluate agent in eval_env and log metrics"""
         eval_metrics = {}
         eval_start_time = time.time()
@@ -278,7 +278,7 @@ def train(cfg: TrainConfig):
             print(colored("First episodes data:", "green", attrs=["bold"]), data)
 
             # Evaluate the initial agent
-            _ = evaluate(step=step)
+            _ = evaluate(step=step, episode_idx=episode_idx)
 
         ##### Log episode metrics #####
         num_new_transitions = data["next"]["step_count"][-1].cpu().item()
@@ -314,7 +314,7 @@ def train(cfg: TrainConfig):
 
             ###### Evaluate ######
             if episode_idx % cfg.eval_every_episodes == 0:
-                evaluate(step=step)
+                evaluate(step=step, episode_idx=episode_idx)
 
         # Release some GPU memory (if possible)
         torch.cuda.empty_cache()
