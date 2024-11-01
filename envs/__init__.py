@@ -3,6 +3,9 @@ from typing import Optional
 
 import gymnasium as gym
 from dm_control import suite
+from tensordict import TensorDictBase
+import torch
+from torchrl.data.tensor_specs import BoundedTensorSpec
 from torchrl.envs import GymEnv, StepCounter, TransformedEnv
 from torchrl.envs.transforms import (
     CatFrames,
@@ -12,6 +15,7 @@ from torchrl.envs.transforms import (
     Resize,
     RewardSum,
     ToTensorImage,
+    Transform,
     TransformedEnv,
 )
 from torchrl.record import VideoRecorder
@@ -20,9 +24,50 @@ from torchrl.record.loggers.csv import CSVLogger
 from .dmcontrol import make_env as dmcontrol_make_env
 
 
+class BodyAndTaskIDs(Transform):
+    """A transform to add one-hot encoded body and/or task IDs to an env."""
+
+    def __init__(
+        self,
+        body_id: Optional[torch.Tensor] = None,
+        task_id: Optional[torch.Tensor] = None,
+    ):
+        super().__init__()
+        for item in [body_id, task_id]:
+            if item is None:
+                continue
+            assert torch.all((item == 0) | (item == 1)), "One-hot values must be binary"
+            assert item.sum() == 1, "One-hot values must sum to 1"
+        self.body_id = body_id.float() if body_id is not None else None
+        self.task_id = task_id.float() if task_id is not None else None
+
+    def _call(self, tensordict: TensorDictBase) -> TensorDictBase:
+        if self.body_id is not None:
+            tensordict["observation"]["body_id"] = self.body_id
+        if self.task_id is not None:
+            tensordict["observation"]["task_id"] = self.task_id
+        return tensordict
+
+    def transform_observation_spec(self, observation_spec):
+        if self.body_id is not None:
+            observation_spec["observation"]["body_id"] = BoundedTensorSpec(
+                low=0, high=1, shape=self.body_id.shape, dtype=torch.float
+            )
+        if self.task_id is not None:
+            observation_spec["observation"]["task_id"] = BoundedTensorSpec(
+                low=0, high=1, shape=self.task_id.shape, dtype=torch.float
+            )
+        return observation_spec
+
+    def forward(self, tensordict: TensorDictBase) -> TensorDictBase:
+        raise RuntimeError("BodyAndTaskIDs can only be used with a transformed env")
+
+
 def make_env(
     env_name: str,
     task_name: Optional[str] = None,
+    body_id: Optional[torch.Tensor] = None,
+    task_id: Optional[torch.Tensor] = None,
     seed: int = 42,
     from_pixels: bool = True,
     frame_skip: int = 2,
@@ -64,7 +109,12 @@ def make_env(
         )
     env = TransformedEnv(
         env,
-        Compose(DoubleToFloat(), StepCounter(), RewardSum()),
+        Compose(
+            DoubleToFloat(),
+            StepCounter(),
+            RewardSum(),
+            BodyAndTaskIDs(body_id, task_id),
+        ),
     )
 
     if from_pixels:
