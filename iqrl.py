@@ -631,7 +631,7 @@ class iQRL(nn.Module):
         }
 
     @torch.no_grad()
-    def select_action(self, obs, eval_mode: bool = False):
+    def select_action(self, obs: TensorDict, eval_mode: bool = False):
         is_flat_obs = False
         if obs.batch_size == torch.Size([]):
             obs = obs.view(1)
