@@ -191,6 +191,11 @@ class Encoder(nn.Module):
         self.obs_spec = obs_spec
         self.act_spec = act_spec
         obs_dim = np.array(obs_spec["state"].shape).prod().item()
+        if "body_id" in obs_spec.keys():
+            obs_dim += np.array(obs_spec["body_id"].shape).prod().item()
+        if "task_id" in obs_spec.keys():
+            obs_dim += np.array(obs_spec["task_id"].shape).prod().item()
+        breakpoint()
         act_dim = np.array(act_spec.shape).prod().item()
 
         ##### Configure FSQ stuff #####
@@ -248,11 +253,13 @@ class Encoder(nn.Module):
         if "pixels" in self.cfg.obs_types:
             raise NotImplementedError()
         zs = {}
-        for key in obs.keys():
+        ids = [x for x in (obs.get("body_id"), obs.get("task_id")) if x is not None]
+        for key in self._encoder.keys():
+            obs_with_ids = torch.cat(ids + [obs[key]], dim=-1)
             if tar:
-                zs.update({key: self._encoder_tar[key](obs[key])})
+                zs[key] = self._encoder_tar[key](obs_with_ids)
             else:
-                zs.update({key: self._encoder[key](obs[key])})
+                zs[key] = self._encoder[key](obs_with_ids)
         if "state" in self.cfg.obs_types and "pixels" not in self.cfg.obs_types:
             z = zs["state"]
             td = TensorDict({"state": z}, batch_size=obs.batch_size)
