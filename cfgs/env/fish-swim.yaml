@@ -3,8 +3,8 @@ defaults:
   - medium
   - _self_
 
-env_name: "fish"
-task_name: "swim"
+envs:
+  - ["fish", "swim"]
 
 agent:
   nstep: 3

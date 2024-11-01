@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import copy
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import numpy as np
 import torch
@@ -322,3 +322,17 @@ def calc_mean_opt_moments(opt):
             except KeyError:
                 pass
     return {"first_moment_mean": first_moment, "second_moment_mean": second_moment}
+
+
+def seq_to_1hot(keys: Sequence[str]):
+    """Returns mapping from string identifiers to one-hot encoded tensors.
+    The order of the input sequence determines the ordering of the encodings."""
+
+    n = len(set(keys))
+    str_to_id = {}
+    next_id = 0
+    for key in keys:
+        if key not in str_to_id.keys():
+            str_to_id[key] = nn.functional.one_hot(torch.tensor(next_id), n)
+            next_id += 1
+    return str_to_id

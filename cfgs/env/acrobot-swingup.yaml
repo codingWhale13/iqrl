@@ -3,8 +3,8 @@ defaults:
   - medium
   - _self_
 
-env_name: "acrobot"
-task_name: "swingup"
+envs:
+  - ["acrobot", "swingup"]
 
 agent:
   enc_tau: 0.0005

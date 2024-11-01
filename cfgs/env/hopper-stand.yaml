@@ -3,5 +3,5 @@ defaults:
   - easy
   - _self_
 
-env_name: "hopper"
-task_name: "stand"
+envs:
+  - ["hopper", "stand"]

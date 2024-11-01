@@ -3,5 +3,5 @@ defaults:
   - hard
   - _self_
 
-env_name: "cartpole"
-task_name: "swingup_sparse"
+envs:
+  - ["cartpole", "swingup_sparse"]

@@ -3,5 +3,5 @@ defaults:
   - easy
   - _self_
 
-env_name: "walker"
-task_name: "walk"
+envs:
+  - ["walker", "walk"]

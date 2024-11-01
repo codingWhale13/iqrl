@@ -3,5 +3,5 @@ defaults:
   - medium
   - _self_
 
-env_name: "walker"
-task_name: "run"
+envs:
+  - ["walker", "run"]

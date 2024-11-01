@@ -3,5 +3,5 @@ defaults:
   - medium
   - _self_
 
-env_name: "cheetah"
-task_name: "run"
+envs:
+  - ["cheetah", "run"]

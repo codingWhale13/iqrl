@@ -7,7 +7,9 @@ import hydra
 from hydra.core.config_store import ConfigStore
 from iqrl import iQRLConfig
 from omegaconf import MISSING
+from torchrl.envs import SerialEnv
 from utils import LUMIConfig, SlurmConfig
+import utils.helper as h
 
 
 @dataclass
@@ -26,9 +28,8 @@ class TrainConfig:
         ]
     )
 
-    # Configure environment (overridden by defaults list)
-    env_name: str = MISSING
-    task_name: str = MISSING
+    # Configure envs as [body_name, task_name] items (overridden by defaults list)
+    envs: list[list[str]] = MISSING
 
     # Agent (overridden by defaults list)
     agent: iQRLConfig = field(default_factory=iQRLConfig)
@@ -127,31 +128,55 @@ def train(cfg: TrainConfig):
     )
 
     ###### Initialise W&B ######
+    env_names = [f"{body_name}-{task_name}" for body_name, task_name in cfg.envs]
+    env_count = len(env_names)
     writer = WandbLogger(
         exp_name=cfg.run_name,
         offline=not cfg.use_wandb,
         project=cfg.wandb_project_name,
-        group=f"{cfg.env_name}-{cfg.task_name}",
-        tags=[f"{cfg.env_name}-{cfg.task_name}", f"seed={str(cfg.seed)}"],
+        # group=f"{cfg.env_name}-{cfg.task_name}", TODO: what are groups in multi-task?
+        tags=env_names + [f"seed={cfg.seed}"],
         save_code=True,
     )
     writer.log_hparams(cfg)
 
     ###### Setup environment for training/evaluation/video recording ######
-    make_env_fn = partial(
-        make_env,
-        env_name=cfg.env_name,
-        task_name=cfg.task_name,
-        seed=cfg.seed,
-        frame_skip=cfg.action_repeat,
-        from_pixels=False,
-        pixels_only=False,
-        device=cfg.device,
-    )
-    env = make_env_fn(record_video=False)
-    eval_env = make_env_fn(record_video=False)
-    video_env = make_env_fn(record_video=cfg.capture_eval_video)
+    body_str_to_id = h.seq_to_1hot([body_name for body_name, _ in cfg.envs])
+    task_str_to_id = h.seq_to_1hot([task_name for _, task_name in cfg.envs])
 
+    common_kwargs_for_make_env = {
+        "seed": cfg.seed,
+        "frame_skip": cfg.action_repeat,
+        "from_pixels": False,
+        "pixels_only": False,
+    }
+    create_env_fn = [
+        partial(
+            make_env,
+            env_name=body_name,
+            task_name=task_name,
+            body_id=body_str_to_id[body_name],
+            task_id=task_str_to_id[task_name],
+            record_video=False,
+            **common_kwargs_for_make_env,
+        )
+        for body_name, task_name in cfg.envs
+    ]
+    create_video_env_fn = [
+        partial(
+            make_env,
+            env_name=body_name,
+            task_name=task_name,
+            body_id=body_str_to_id[body_name],
+            task_id=task_str_to_id[task_name],
+            record_video=cfg.capture_eval_video,
+            **common_kwargs_for_make_env,
+        )
+        for body_name, task_name in cfg.envs
+    ]
+    env = SerialEnv(env_count, create_env_fn)
+    eval_env = SerialEnv(env_count, create_env_fn)
+    video_env = SerialEnv(env_count, create_video_env_fn)
     assert isinstance(
         env.action_spec, BoundedTensorSpec
     ), "only continuous action space is supported"
@@ -161,6 +186,7 @@ def train(cfg: TrainConfig):
     rb = ReplayBuffer(
         buffer_size=cfg.buffer_size,
         batch_size=cfg.agent.batch_size,
+        buffer_count=env_count,
         nstep=nstep,
         gamma=cfg.agent.gamma,
         prefetch=cfg.prefetch,
@@ -169,10 +195,19 @@ def train(cfg: TrainConfig):
     )
 
     ###### Init agent ######
+    # iQRL components should not worry about batch dimensions
+    subenv_dummy = make_env(
+        env_name=cfg.envs[0][0],
+        task_name=cfg.envs[0][1],
+        body_id=body_str_to_id[cfg.envs[0][0]],
+        task_id=task_str_to_id[cfg.envs[0][1]],
+        record_video=False,
+        **common_kwargs_for_make_env,
+    )
     agent = iQRL(
         cfg=cfg.agent,
-        obs_spec=env.observation_spec["observation"],
-        act_spec=env.action_spec,
+        obs_spec=subenv_dummy.observation_spec["observation"],
+        act_spec=subenv_dummy.action_spec,
     )
     # Load state dict into this agent from filepath (or dictionary)
     if cfg.checkpoint is not None:
@@ -192,11 +227,10 @@ def train(cfg: TrainConfig):
     )
 
     ##### Print information about run #####
-    task = cfg.env_name if cfg.task_name == "" else cfg.env_name + "-" + cfg.task_name
     steps = (cfg.num_episodes * cfg.max_episode_steps) / 1e6
     total_params = int(agent.total_params / 1e6)
     writer.log_hparams({"total_params": agent.total_params})
-    print(colored("Task:", "yellow", attrs=["bold"]), task)
+    print(colored("Envs:", "yellow", attrs=["bold"]), "_".join(env_names))
     print(colored("Number of episodes:", "yellow", attrs=["bold"]), cfg.num_episodes)
     print(colored("Max number of env. steps:", "yellow", attrs=["bold"]), steps, "M")
     print(colored("Action repeat:", "green", attrs=["bold"]), cfg.action_repeat)
@@ -206,23 +240,35 @@ def train(cfg: TrainConfig):
 
     def evaluate(step: int, episode_idx: int) -> dict:
         """Evaluate agent in eval_env and log metrics"""
-        eval_metrics = {}
+        eval_metrics = {env_name: {} for env_name in env_names}
         eval_start_time = time.time()
         with torch.no_grad():
-            episodic_returns, episodic_successes = [], []
+            episodic_returns, episodic_successes = {name: [] for name in env_names}, {
+                name: [] for name in env_names
+            }
             for _ in range(cfg.num_eval_episodes):
                 eval_data = eval_env.rollout(
                     max_steps=cfg.max_episode_steps // cfg.action_repeat,
                     policy=eval_policy_module,
+                    break_when_any_done=False,
                 )
-                episodic_returns.append(
-                    eval_data["next"]["episode_reward"][-1].cpu().item()
-                )
-                success = eval_data["next"].get("success", None)
-                if success is not None:
-                    episodic_successes.append(success.any())
 
-            eval_episodic_return = sum(episodic_returns) / cfg.num_eval_episodes
+                success = eval_data["next"].get("success", None)
+                for i, env_name in enumerate(env_names):
+                    episodic_returns[env_name].append(
+                        eval_data["next"]["episode_reward"][i][-1].cpu().item()
+                    )
+
+                    if success is not None:
+                        episodic_successes[env_name].append(success[i].any())
+
+            sum_of_eval_episodic_returns = 0
+            for i, env_name in enumerate(env_names):
+                eval_episodic_return = (
+                    sum(episodic_returns[env_name]) / cfg.num_eval_episodes
+                )
+                eval_metrics[env_name]["episodic_return"] = eval_episodic_return
+                sum_of_eval_episodic_returns += eval_episodic_return
 
             if success is not None:
                 # TODO is episodic_successes being calculated correctly
@@ -230,20 +276,19 @@ def train(cfg: TrainConfig):
                 eval_metrics.update({"episodic_success": episodic_success})
 
         ##### Eval metrics #####
-        eval_metrics.update(
-            {
-                "episodic_return": eval_episodic_return,
-                "elapsed_time": time.time() - start_time,
-                "SPS": int(step / (time.time() - start_time)),
-                "episode_time": (time.time() - eval_start_time) / cfg.num_eval_episodes,
-                "env_step": step * cfg.action_repeat,
-                "step": step,
-                "episode": episode_idx,
-            }
-        )
+        eval_metrics["general_info"] = {
+            "elapsed_time": time.time() - start_time,
+            "SPS": int(step / (time.time() - start_time)),
+            "episode_time": (time.time() - eval_start_time) / cfg.num_eval_episodes,
+            "env_step": step * cfg.action_repeat,
+            "step": step,
+            "episode": episode_idx,
+        }
+
         if cfg.verbose:
             logger.info(
-                f"Episode {episode_idx} | Env Step {step*cfg.action_repeat} | Eval return {eval_episodic_return:.2f}"
+                f"Episode {episode_idx} | Env Step {step*cfg.action_repeat} | "
+                f"Eval return (avg.) {sum_of_eval_episodic_returns/env_count:.2f}"
             )
 
         with torch.no_grad():
@@ -251,6 +296,7 @@ def train(cfg: TrainConfig):
                 video_env.rollout(
                     max_steps=cfg.max_episode_steps // cfg.action_repeat,
                     policy=eval_policy_module,
+                    break_when_any_done=False,
                 )
                 video_env.transform.dump()
 
@@ -262,7 +308,7 @@ def train(cfg: TrainConfig):
         writer.log_scalar(name="eval/", value=eval_metrics)
         return eval_metrics
 
-    step = 0
+    step = 0  # NOTE: 1 step means 1 step per sub-envs
     start_time = time.time()
     for episode_idx in range(cfg.num_episodes):
         ##### Rollout the policy in the environment #####
@@ -270,6 +316,7 @@ def train(cfg: TrainConfig):
             data = env.rollout(
                 max_steps=cfg.max_episode_steps // cfg.action_repeat,
                 policy=policy_module,
+                break_when_any_done=False,
             )
         ##### Add data to the replay buffer #####
         rb.extend(data)
@@ -281,15 +328,23 @@ def train(cfg: TrainConfig):
             _ = evaluate(step=step, episode_idx=episode_idx)
 
         ##### Log episode metrics #####
-        num_new_transitions = data["next"]["step_count"][-1].cpu().item()
+        num_new_transitions = sum(
+            data["next"]["step_count"][i][-1].cpu().sum().item()
+            for i in range(env_count)
+        )
         step += num_new_transitions
-        episode_reward = data["next"]["episode_reward"][-1].cpu().item()
+        episode_rewards = [
+            data["next"]["episode_reward"][i][-1].cpu().item() for i in range(env_count)
+        ]
+        episodic_return_avg = sum(episode_rewards) / env_count
         if cfg.verbose:
             logger.info(
-                f"Episode {episode_idx} | Env Step {step*cfg.action_repeat} | Train return {episode_reward:.2f}"
+                f"Episode {episode_idx} | Env Step {step*cfg.action_repeat} | "
+                f"Train Return Avg. {episodic_return_avg:.2f} | "
+                f"Train Return Ind. {' '.join(map(str, episode_rewards))}"
             )
         rollout_metrics = {
-            "episodic_return": episode_reward,
+            "episodic_return_avg": episodic_return_avg,
             "episodic_length": num_new_transitions,
             "env_step": step * cfg.action_repeat,
         }

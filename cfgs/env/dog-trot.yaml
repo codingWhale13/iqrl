@@ -3,8 +3,8 @@ defaults:
   - hard
   - _self_
 
-env_name: "dog"
-task_name: "trot"
+envs:
+  - ["dog", "trot"]
 
 agent:
   latent_dim: 1024

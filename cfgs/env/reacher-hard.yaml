@@ -3,8 +3,8 @@ defaults:
   - medium
   - _self_
 
-env_name: "reacher"
-task_name: "hard"
+envs:
+  - ["reacher", "hard"]
 
 agent:
   nstep: 3

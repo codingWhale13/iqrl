@@ -3,5 +3,5 @@ defaults:
   - easy
   - _self_
 
-env_name: "pendulum"
-task_name: "swingup"
+envs:
+  - ["pendulum", "swingup"]

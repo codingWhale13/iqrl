@@ -3,5 +3,5 @@ defaults:
   - medium
   - _self_
 
-env_name: "quadruped"
-task_name: "run"
+envs:
+  - ["quadruped", "run"]

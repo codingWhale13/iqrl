@@ -3,5 +3,5 @@ defaults:
   - medium
   - _self_
 
-env_name: "hopper"
-task_name: "hop"
+envs:
+  - ["hopper", "hop"]

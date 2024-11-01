@@ -3,5 +3,5 @@ defaults:
   - _self_
   - easy
 
-env_name: "cartpole"
-task_name: "balance"
+envs:
+  - ["cartpole", "balance"]

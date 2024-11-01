@@ -3,8 +3,8 @@ defaults:
   - medium
   - _self_
 
-env_name: "fish"
-task_name: "upright"
+envs:
+  - ["fish", "upright"]
 
 agent:
   nstep: 3

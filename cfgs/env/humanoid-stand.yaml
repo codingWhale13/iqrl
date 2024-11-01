@@ -3,8 +3,8 @@ defaults:
   - hard
   - _self_
 
-env_name: "humanoid"
-task_name: "stand"
+envs:
+  - ["humanoid", "stand"]
 
 agent:
   latent_dim: 1024

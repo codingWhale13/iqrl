@@ -3,5 +3,5 @@ defaults:
   - _self_
   - medium
 
-env_name: "finger"
-task_name: "turn_easy"
+envs:
+  - ["finger", "turn_easy"]
