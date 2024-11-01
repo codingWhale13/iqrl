@@ -195,7 +195,6 @@ class Encoder(nn.Module):
             obs_dim += np.array(obs_spec["body_id"].shape).prod().item()
         if "task_id" in obs_spec.keys():
             obs_dim += np.array(obs_spec["task_id"].shape).prod().item()
-        breakpoint()
         act_dim = np.array(act_spec.shape).prod().item()
 
         ##### Configure FSQ stuff #####
@@ -433,9 +432,7 @@ class iQRL(nn.Module):
 
         ##### Calculate dimensions for MLPs #####
         act_dim = np.array(act_spec.shape).prod().item()
-        if "state" in cfg.obs_types:
-            obs_dim = np.array(obs_spec["state"].shape).prod().item()
-        else:
+        if "state" not in cfg.obs_types:
             raise NotImplementedError("Need to use state observations")
 
         self.cfg = cfg
