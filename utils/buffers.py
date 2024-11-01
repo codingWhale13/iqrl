@@ -64,7 +64,7 @@ class ReplayBuffer:
 
         if self.buffer_count == 1:
             # Single-task behaviour: no need for ReplayBufferEnsemble
-            self.rb == rbs[0]
+            self.rb = rbs[0]
         else:
             self.rb = ReplayBufferEnsemble(
                 *rbs, batch_size=batch_size * nstep, sample_from_all=True
