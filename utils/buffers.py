@@ -62,22 +62,14 @@ class ReplayBuffer:
             for _ in range(buffer_count)
         ]
 
-        if self.buffer_count == 1:
-            # Single-task behaviour: no need for ReplayBufferEnsemble
-            self.rb = rbs[0]
-        else:
-            self.rb = ReplayBufferEnsemble(
-                *rbs, batch_size=batch_size * nstep, sample_from_all=True
-            )
+        self.rb = ReplayBufferEnsemble(
+            *rbs, batch_size=batch_size * nstep, sample_from_all=True
+        )
 
     def extend(self, data):
-        if self.buffer_count == 1:
-            # Single-task behaviour: data has no batch dimension
-            self.rb.extend(data.cpu())
-        else:
-            assert data.shape[0] == self.buffer_count
-            for i in range(self.buffer_count):
-                self.rb[i].extend(data[i].cpu())
+        assert data.shape[0] == self.buffer_count, "Expected leading dim to be #envs"
+        for i in range(self.buffer_count):
+            self.rb[i].extend(data[i].cpu())
 
     def sample(
         self, return_nstep: bool = False, batch_size: Optional[int] = None
