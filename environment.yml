@@ -36,7 +36,7 @@ dependencies:
       # TODO metaworld wants to use gymnasium==1.0.0a1
       - git+https://github.com/Farama-Foundation/Metaworld.git@master#egg=metaworld==2.0.0
       - jaxtyping==0.2.23  # Types with shapes for tensors
-      - dm_control==1.0.14  # Handles mujoco installation
+      - dm_control==1.0.25  # Handles mujoco installation
       - jaxtyping
       - vector_quantize_pytorch==1.15.6 # This installs PyTorch (needs >2.0)
       - tensordict==0.3.1
