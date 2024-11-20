@@ -6,10 +6,17 @@ from typing import Any, List, Optional
 import hydra
 from hydra.core.config_store import ConfigStore
 from iqrl import iQRLConfig
-from omegaconf import MISSING
+from omegaconf import MISSING, OmegaConf
 from torchrl.envs import SerialEnv
 from utils import LUMIConfig, SlurmConfig
 import utils.helper as h
+
+
+def envs_to_name(envs):
+    return "_".join(f"{body}-{task}" for body, task in envs)
+
+
+OmegaConf.register_new_resolver("envs_to_name", envs_to_name)
 
 
 @dataclass
@@ -30,6 +37,7 @@ class TrainConfig:
 
     # Configure envs as [body_name, task_name] items (overridden by defaults list)
     envs: list[list[str]] = MISSING
+    name: str = MISSING
 
     # Agent (overridden by defaults list)
     agent: iQRLConfig = field(default_factory=iQRLConfig)
