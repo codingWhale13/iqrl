@@ -254,7 +254,7 @@ class Encoder(nn.Module):
         zs = {}
         ids = [x for x in (obs.get("body_id"), obs.get("task_id")) if x is not None]
         for key in self._encoder.keys():
-            obs_with_ids = torch.cat(ids + [obs[key]], dim=-1)
+            obs_with_ids = torch.cat(ids + [obs[key]], dim=-1).to(self.cfg.device)
             if tar:
                 zs[key] = self._encoder_tar[key](obs_with_ids)
             else:
