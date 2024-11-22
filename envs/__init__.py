@@ -48,6 +48,11 @@ class BodyAndTaskIDs(Transform):
             tensordict["observation"]["task_id"] = self.task_id
         return tensordict
 
+    def _reset(
+        self, tensordict: TensorDictBase, tensordict_reset: TensorDictBase
+    ) -> TensorDictBase:
+        return self._call(tensordict_reset)
+
     def transform_observation_spec(self, observation_spec):
         if self.body_id is not None:
             observation_spec["observation"]["body_id"] = BoundedTensorSpec(
