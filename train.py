@@ -170,9 +170,10 @@ def train(cfg: TrainConfig):
         )
         for body_name, task_name in cfg.envs
     ]
-    create_video_env_fn = [
-        partial(
-            make_env,
+    env = SerialEnv(env_count, create_env_fn)
+    eval_env = SerialEnv(env_count, create_env_fn)
+    video_envs = [
+        make_env(
             env_name=body_name,
             task_name=task_name,
             body_id=body_str_to_id[body_name],
@@ -182,9 +183,7 @@ def train(cfg: TrainConfig):
         )
         for body_name, task_name in cfg.envs
     ]
-    env = SerialEnv(env_count, create_env_fn)
-    eval_env = SerialEnv(env_count, create_env_fn)
-    video_env = SerialEnv(env_count, create_video_env_fn)
+
     assert isinstance(
         env.action_spec, BoundedTensorSpec
     ), "only continuous action space is supported"
@@ -301,12 +300,13 @@ def train(cfg: TrainConfig):
 
         with torch.no_grad():
             if cfg.capture_eval_video:
-                video_env.rollout(
-                    max_steps=cfg.max_episode_steps // cfg.action_repeat,
-                    policy=eval_policy_module,
-                    break_when_any_done=False,
-                )
-                video_env.transform.dump()
+                for video_env in video_envs:
+                    video_env.rollout(
+                        max_steps=cfg.max_episode_steps // cfg.action_repeat,
+                        policy=eval_policy_module,
+                        break_when_any_done=False,
+                    )
+                    video_env.transform.dump()
 
         ##### Log rank of latent and active codebook percent #####
         batch = rb.sample(batch_size=agent.encoder.cfg.latent_dim)

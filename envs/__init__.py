@@ -145,7 +145,11 @@ def make_env(
             logger = CSVLogger(exp_name="", log_dir="./logs", video_format="mp4")
         env = TransformedEnv(
             env,
-            VideoRecorder(logger=logger, tag="run_video", in_keys=video_rec_in_keys),
+            VideoRecorder(
+                logger=logger,
+                tag=f"run_video_{env_name}-{task_name}",
+                in_keys=video_rec_in_keys,
+            ),
         )
     env.set_seed(seed)
     return env
