@@ -269,13 +269,14 @@ def train(cfg: TrainConfig):
                     if success is not None:
                         episodic_successes[env_name].append(success[i].any())
 
-            sum_of_eval_episodic_returns = 0
             for i, env_name in enumerate(env_names):
                 eval_episodic_return = (
                     sum(episodic_returns[env_name]) / cfg.num_eval_episodes
                 )
                 eval_metrics[env_name]["episodic_return"] = eval_episodic_return
-                sum_of_eval_episodic_returns += eval_episodic_return
+            eval_episodic_return_mean = np.mean(
+                [eval_metrics[env_name]["episodic_return"] for env_name in env_names]
+            )
 
             if success is not None:
                 # TODO is episodic_successes being calculated correctly
@@ -283,19 +284,22 @@ def train(cfg: TrainConfig):
                 eval_metrics.update({"episodic_success": episodic_success})
 
         ##### Eval metrics #####
-        eval_metrics["general_info"] = {
-            "elapsed_time": time.time() - start_time,
-            "SPS": int(step / (time.time() - start_time)),
-            "episode_time": (time.time() - eval_start_time) / cfg.num_eval_episodes,
-            "env_step": step * cfg.action_repeat,
-            "step": step,
-            "episode": episode_idx,
-        }
+        eval_metrics.update(
+            {
+                "episodic_return_mean": eval_episodic_return_mean,
+                "elapsed_time": time.time() - start_time,
+                "SPS": int(step / (time.time() - start_time)),
+                "episode_time": (time.time() - eval_start_time) / cfg.num_eval_episodes,
+                "env_step": step * cfg.action_repeat,
+                "step": step,
+                "episode": episode_idx,
+            }
+        )
 
         if cfg.verbose:
             logger.info(
                 f"Episode {episode_idx} | Env Step {step*cfg.action_repeat} | "
-                f"Eval return (avg.) {sum_of_eval_episodic_returns/env_count:.2f}"
+                f"Eval return (mean over envs) {eval_episodic_return_mean:.2f}"
             )
 
         with torch.no_grad():
@@ -344,18 +348,23 @@ def train(cfg: TrainConfig):
         episode_rewards = [
             data["next"]["episode_reward"][i][-1].cpu().item() for i in range(env_count)
         ]
-        episodic_return_avg = sum(episode_rewards) / env_count
+
+        episodic_return_mean = sum(episode_rewards) / env_count
         if cfg.verbose:
             logger.info(
                 f"Episode {episode_idx} | Env Step {step*cfg.action_repeat} | "
-                f"Train Return Avg. {episodic_return_avg:.2f} | "
-                f"Train Return Ind. {' '.join(map(str, episode_rewards))}"
+                f"Train return (mean over envs) {episodic_return_mean:.2f} | "
+                f"Train return per env {' '.join(map(str, episode_rewards))}"
             )
         rollout_metrics = {
-            "episodic_return_avg": episodic_return_avg,
+            "episodic_return_mean": episodic_return_mean,
             "episodic_length": num_new_transitions,
             "env_step": step * cfg.action_repeat,
         }
+        rollout_metrics.update({env_name: {} for env_name in env_names})
+        for i in range(env_count):
+            rollout_metrics[env_names[i]]["episodic_return"] = episode_rewards[i]
+
         success = data["next"].get("success", None)
         if success is not None:
             episode_success = success.any()
