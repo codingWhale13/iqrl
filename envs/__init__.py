@@ -19,7 +19,7 @@ from torchrl.envs.transforms import (
     TransformedEnv,
 )
 from torchrl.record import VideoRecorder
-from torchrl.record.loggers.csv import CSVLogger
+from torchrl.record.loggers import WandbLogger
 
 from .dmcontrol import make_env as dmcontrol_make_env
 
@@ -140,9 +140,10 @@ def make_env(
         video_rec_in_keys = ("observation", "pixels")
     else:
         video_rec_in_keys = "pixels"
+
     if record_video:
         if logger is None:
-            logger = CSVLogger(exp_name="", log_dir="./logs", video_format="mp4")
+            logger = WandbLogger(exp_name="", log_dir="./logs")
         env = TransformedEnv(
             env,
             VideoRecorder(

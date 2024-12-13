@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+import os
+
+os.environ["MUJOCO_GL"] = "osmesa"  # Needed for video recording on GPU
+
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, List, Optional
@@ -157,6 +161,7 @@ def train(cfg: TrainConfig):
         "frame_skip": cfg.action_repeat,
         "from_pixels": False,
         "pixels_only": False,
+        "logger": writer,
     }
     create_env_fn = [
         partial(
@@ -302,8 +307,9 @@ def train(cfg: TrainConfig):
                 f"Eval return (mean over envs) {eval_episodic_return_mean:.2f}"
             )
 
-        with torch.no_grad():
-            if cfg.capture_eval_video:
+        when_to_log = [0, cfg.num_episodes // 2, cfg.num_episodes - 1]
+        if cfg.capture_eval_video and episode_idx in when_to_log:
+            with torch.no_grad():
                 for video_env in video_envs:
                     video_env.rollout(
                         max_steps=cfg.max_episode_steps // cfg.action_repeat,
