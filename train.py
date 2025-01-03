@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import os
 
-os.environ["MUJOCO_GL"] = "osmesa"  # Needed for video recording on GPU
+# Use osmesa for headless video rendering (on GPU)
+os.environ["MUJOCO_GL"] = "osmesa"
+os.environ["PYOPENGL_PLATFORM"] = "osmesa"
 
 from dataclasses import dataclass, field
 from functools import partial
