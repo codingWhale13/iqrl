@@ -529,7 +529,45 @@ class iQRL(nn.Module):
             logger.info("Finished training iQRL")
         return info
 
-    def representation_update_step(self, batch: ReplayBufferSamples):
+    def fake_update(
+        self, replay_buffer: ReplayBuffer, num_new_transitions: int, rb_idx: int
+    ) -> dict:
+        """Fake update for logging, just to get info for single task"""
+        num_updates = int(num_new_transitions * self.cfg.utd_ratio)
+        info = {}
+
+        for i in range(num_updates):
+            batch = replay_buffer.sample()
+
+            # Update enc less frequently than actor/critic
+            if i % self.cfg.enc_update_freq == 0:
+                info.update(self.representation_update_step(batch=batch, fake=True))
+
+            # Map observations to latent
+            with torch.no_grad():
+                z = self.encoder.encode(batch.observations, tar=False)
+                next_z = self.encoder.encode(batch.next_observations, tar=False)
+            batch = batch._replace(z=z, next_z=next_z)
+
+            ##### Make nstep returns #####
+            if self.cfg.horizon == 1:
+                raise NotImplementedError("Check N-step batch is made correctly if h=1")
+            nstep_batch = utils.to_nstep(
+                batch, nstep=self.cfg.nstep, gamma=self.cfg.gamma
+            )
+
+            ##### Update critic #####
+            info.update(self.critic_update_step(batch=nstep_batch, fake=True))
+
+            ##### Update actor less frequently than critic #####
+            if self.critic_update_counter % self.cfg.actor_update_freq == 0:
+                info.update(self.pi_update_step(batch=nstep_batch, fake=True))
+
+        return info
+
+    def representation_update_step(
+        self, batch: ReplayBufferSamples, fake: bool = False
+    ):
         self.encoder.train()
         loss, info = self.encoder.loss(batch=batch)
 
@@ -543,22 +581,22 @@ class iQRL(nn.Module):
             )
             info.update({"grad_norm": float(grad_norm)})
 
-        self.enc_opt.step()
+        if not fake:  # Actually perform the optimization step
+            self.enc_opt.step()
 
-        # Update the tar network
-        h.soft_update_params(
-            self.encoder._encoder, self.encoder._encoder_tar, tau=self.cfg.enc_tau
-        )
-        if self.cfg.use_latent_projection:
+            # Update the tar network
             h.soft_update_params(
-                self.encoder._proj, self.encoder._proj_tar, tau=self.cfg.enc_tau
+                self.encoder._encoder, self.encoder._encoder_tar, tau=self.cfg.enc_tau
             )
+            if self.cfg.use_latent_projection:
+                h.soft_update_params(
+                    self.encoder._proj, self.encoder._proj_tar, tau=self.cfg.enc_tau
+                )
 
         self.encoder.eval()
         return info
 
-    def critic_update_step(self, batch: ReplayBufferSamples):
-        self.critic_update_counter += 1
+    def critic_update_step(self, batch: ReplayBufferSamples, fake: bool = False):
         self.Q.train()
         self.Q_tar.train()
 
@@ -587,13 +625,16 @@ class iQRL(nn.Module):
         next_q_value = next_q_value.broadcast_to(q_values.shape)
         q_loss = F.mse_loss(q_values, next_q_value)
 
-        ##### Optimize critic #####
-        self.q_opt.zero_grad(set_to_none=True)
-        q_loss.backward()
-        self.q_opt.step()
+        if not fake:  # Actually perform the optimization step
+            self.critic_update_counter += 1
 
-        ##### Update the target network #####
-        h.soft_update_params(self.Q, self.Q_tar, tau=self.cfg.tau)
+            ##### Optimize critic #####
+            self.q_opt.zero_grad(set_to_none=True)
+            q_loss.backward()
+            self.q_opt.step()
+
+            ##### Update the target network #####
+            h.soft_update_params(self.Q, self.Q_tar, tau=self.cfg.tau)
 
         self.Q.eval()
         self.Q_tar.eval()
@@ -613,20 +654,21 @@ class iQRL(nn.Module):
             info.update({f"q{i+1}_values": q_values[i].mean().item()})
         return info
 
-    def pi_update_step(self, batch: ReplayBufferSamples):
+    def pi_update_step(self, batch: ReplayBufferSamples, fake: bool = False):
         self.pi_update_counter += 1
         self._pi.train()
 
         z = batch.z["state"]
         pi_loss = -self.Q(z=z, a=self._pi(z), return_type="avg").mean()
 
-        ##### Optimize actor #####
-        self.pi_opt.zero_grad(set_to_none=True)
-        pi_loss.backward()
-        self.pi_opt.step()
+        if not fake:  # Actually perform the optimization step
+            ##### Optimize actor #####
+            self.pi_opt.zero_grad(set_to_none=True)
+            pi_loss.backward()
+            self.pi_opt.step()
 
-        ##### Update the target network #####
-        h.soft_update_params(self._pi, self._pi_tar, tau=self.cfg.tau)
+            ##### Update the target network #####
+            h.soft_update_params(self._pi, self._pi_tar, tau=self.cfg.tau)
 
         self._pi.eval()
         return {

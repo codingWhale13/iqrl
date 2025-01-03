@@ -51,7 +51,7 @@ class ReplayBuffer:
             truncated_key=None,
         )
         # Instantiate buffer_count many simple replay buffers
-        rbs = [
+        self.rbs = [
             TorchRLReplayBuffer(
                 storage=LazyMemmapStorage(buffer_size),
                 pin_memory=pin_memory,
@@ -65,7 +65,7 @@ class ReplayBuffer:
             rb.append_transform(lambda x: x.to(device))
 
         self.rb = ReplayBufferEnsemble(
-            *rbs, batch_size=batch_size * nstep, sample_from_all=True
+            *self.rbs, batch_size=batch_size * nstep, sample_from_all=True
         )
 
     def extend(self, data):
@@ -74,9 +74,12 @@ class ReplayBuffer:
             self.rb[i].extend(data[i].cpu())
 
     def sample(
-        self, return_nstep: bool = False, batch_size: Optional[int] = None
+        self,
+        return_nstep: bool = False,
+        batch_size: Optional[int] = None,
+        rb_idx: Optional[int] = None,
     ) -> ReplayBufferSamples:
-        batch = self._sample()
+        batch = self._sample(rb_idx=rb_idx)
         if batch_size is not None and batch_size > self.batch_size:
             # TODO Fix this hack to get larger batch size
             # If requesting large batch size sample multiple times and concat
@@ -99,8 +102,9 @@ class ReplayBuffer:
         else:
             return to_nstep(batch, nstep=self.nstep, gamma=self.gamma)
 
-    def _sample(self) -> TensorDict:
-        batch = self.rb.sample().reshape(-1, self.nstep).transpose(0, 1)
+    def _sample(self, rb_idx=None) -> TensorDict:
+        batch = self.rb.sample() if rb_idx is None else self.rbs[rb_idx].sample()
+        batch = batch.reshape(-1, self.nstep).transpose(0, 1)
         next_state_gammas = torch.ones_like(
             batch["next"]["done"][..., 0], dtype=torch.float32
         )

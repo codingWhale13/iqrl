@@ -386,6 +386,17 @@ def train(cfg: TrainConfig):
             ##### Log training metrics #####
             writer.log_scalar(name="train/", value=train_metrics)
 
+            if episode_idx % 25 == 0:
+                for i in range(env_count):
+                    single_task_metrics = agent.fake_update(
+                        replay_buffer=rb,
+                        num_new_transitions=num_new_transitions,
+                        rb_idx=i,
+                    )
+                    writer.log_scalar(
+                        name=f"train_{env_names[i]}/", value=single_task_metrics
+                    )
+
             ##### Save checkpoint #####
             torch.save({"model": agent.state_dict()}, "./checkpoint")
 
