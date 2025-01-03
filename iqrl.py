@@ -30,7 +30,7 @@ class iQRLConfig:
     lr: float = 3e-4
     """Batch size - same for for representation learning and actor/critic"""
     batch_size: int = 256
-    """Number of parameter updates per new data, i.e .UTD ratio """
+    """Number of parameter updates per new data, i.e. UTD ratio """
     utd_ratio: int = 1
     """Update actor less frequently than critic"""
     actor_update_freq: int = 2
