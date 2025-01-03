@@ -5,7 +5,7 @@ import gymnasium as gym
 from dm_control import suite
 from tensordict import TensorDictBase
 import torch
-from torchrl.data.tensor_specs import BoundedTensorSpec
+from torchrl.data.tensor_specs import Bounded
 from torchrl.envs import GymEnv, StepCounter, TransformedEnv
 from torchrl.envs.transforms import (
     CatFrames,
@@ -55,11 +55,11 @@ class BodyAndTaskIDs(Transform):
 
     def transform_observation_spec(self, observation_spec):
         if self.body_id is not None:
-            observation_spec["observation"]["body_id"] = BoundedTensorSpec(
+            observation_spec["observation"]["body_id"] = Bounded(
                 low=0, high=1, shape=self.body_id.shape, dtype=torch.float
             )
         if self.task_id is not None:
-            observation_spec["observation"]["task_id"] = BoundedTensorSpec(
+            observation_spec["observation"]["task_id"] = Bounded(
                 low=0, high=1, shape=self.task_id.shape, dtype=torch.float
             )
         return observation_spec
