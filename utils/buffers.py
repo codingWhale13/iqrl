@@ -53,7 +53,7 @@ class ReplayBuffer:
         # Instantiate buffer_count many simple replay buffers
         rbs = [
             TorchRLReplayBuffer(
-                storage=LazyMemmapStorage(buffer_size, device=device),
+                storage=LazyMemmapStorage(buffer_size),
                 pin_memory=pin_memory,
                 sampler=self.sampler,
                 prefetch=prefetch,
@@ -61,6 +61,8 @@ class ReplayBuffer:
             )
             for _ in range(buffer_count)
         ]
+        for rb in self.rbs:
+            rb.append_transform(lambda x: x.to(device))
 
         self.rb = ReplayBufferEnsemble(
             *rbs, batch_size=batch_size * nstep, sample_from_all=True
