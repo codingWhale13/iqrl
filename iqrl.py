@@ -237,18 +237,7 @@ class Encoder(nn.Module):
                 }
             )
         if "pixels" in cfg.obs_types:  # Encoder for pixel-based observations
-            if self.cfg.enc_norm_type == "bn":
-                raise NotImplementedError("Need to implement BN for CNN encoder")
-            self._encoder.update(
-                {
-                    "pixels": h.CNNEncoder(
-                        obs_shape=obs_spec.shape,
-                        latent_dim=cfg.latent_dim,
-                        hidden_dim=256,
-                        frame_diff=False,
-                    )
-                }
-            )
+            raise ValueError("Pixel-based observations are currently not supported")
         if cfg.use_tar_enc:
             self._encoder_tar = copy.deepcopy(self._encoder).requires_grad_(False)
 
