@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 
 
 class ReplayBufferSamples(NamedTuple):
-    observations: TensorDict
-    actions: torch.Tensor
-    next_observations: TensorDict
+    observations: TensorDict  # zero-padded to avoid LazyStackedTensorDict
+    actions: torch.Tensor  # zero-padded to avoid torch.nested.tensor
+    next_observations: TensorDict  # zero-padded to avoid LazyStackedTensorDict
     dones: torch.Tensor
     terminateds: torch.Tensor
     rewards: torch.Tensor

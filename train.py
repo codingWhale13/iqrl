@@ -119,9 +119,10 @@ def train(cfg: TrainConfig):
     import torch
     from envs import make_env
     from iqrl import iQRL
+    from tensordict import pad_sequence
     from tensordict.nn import TensorDictModule
     from termcolor import colored
-    from torchrl.data.tensor_specs import BoundedTensorSpec
+    from torchrl.data.tensor_specs import BoundedContinuous
     from torchrl.record.loggers.wandb import WandbLogger
     from utils import ReplayBuffer
 
@@ -176,6 +177,25 @@ def train(cfg: TrainConfig):
         )
         for body_name, task_name in cfg.envs
     ]
+
+    obs_specs = []
+    act_specs = []
+    for fn in create_env_fn:
+        subenv_dummy = fn()
+        obs_specs.append(subenv_dummy.observation_spec["observation"])
+        act_specs.append(subenv_dummy.action_spec)
+        assert isinstance(
+            subenv_dummy.action_spec, BoundedContinuous
+        ), "Only continuous action space is supported"
+
+    ids_to_dims = {}  # (body ID, task ID) -> (obs dim, action dim), all integers
+    for i in range(env_count):
+        body_id = np.argmax(body_str_to_id[cfg.envs[i][0]]).item()
+        task_id = np.argmax(task_str_to_id[cfg.envs[i][1]]).item()
+        o = np.array(obs_specs[i]["state"].shape).prod().item()
+        a = np.array(act_specs[i].shape).prod().item()
+        ids_to_dims[(body_id, task_id)] = (o, a)
+
     env = ParallelEnv(env_count, create_env_fn)
     eval_env = ParallelEnv(env_count, create_env_fn)
     video_envs = [
@@ -189,10 +209,6 @@ def train(cfg: TrainConfig):
         )
         for body_name, task_name in cfg.envs
     ]
-
-    assert isinstance(
-        env.action_spec, BoundedTensorSpec
-    ), "only continuous action space is supported"
 
     ###### Prepare replay buffer ######
     nstep = max(cfg.agent.get("nstep", 1), cfg.agent.get("horizon", 1))
@@ -208,19 +224,8 @@ def train(cfg: TrainConfig):
     )
 
     ###### Init agent ######
-    # iQRL components should not worry about batch dimensions
-    subenv_dummy = make_env(
-        env_name=cfg.envs[0][0],
-        task_name=cfg.envs[0][1],
-        body_id=body_str_to_id[cfg.envs[0][0]],
-        task_id=task_str_to_id[cfg.envs[0][1]],
-        record_video=False,
-        **common_kwargs_for_make_env,
-    )
     agent = iQRL(
-        cfg=cfg.agent,
-        obs_spec=subenv_dummy.observation_spec["observation"],
-        act_spec=subenv_dummy.action_spec,
+        cfg=cfg.agent, obs_specs=obs_specs, act_specs=act_specs, ids_to_dims=ids_to_dims
     )
     # Load state dict into this agent from filepath (or dictionary)
     if cfg.checkpoint is not None:
@@ -338,6 +343,7 @@ def train(cfg: TrainConfig):
                 break_when_any_done=False,
             )
         ##### Add data to the replay buffer #####
+        data = pad_sequence(data, pad_dim=-1)  # LazyStackedTensorDict -> TensorDict
         rb.extend(data)
 
         if episode_idx == 0:
