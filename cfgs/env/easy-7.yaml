@@ -1,0 +1,13 @@
+# @package _global_
+defaults:
+  - _self_
+  - easy
+
+envs:
+  - ["cartpole", "balance"]
+  - ["cup", "catch"]
+  - ["finger", "spin"]
+  - ["hopper", "stand"]
+  - ["pendulum", "swingup"]
+  - ["walker", "stand"]
+  - ["walker", "walk"]
