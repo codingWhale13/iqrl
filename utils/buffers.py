@@ -64,8 +64,11 @@ class ReplayBuffer:
         for rb in self.rbs:
             rb.append_transform(lambda x: x.to(device))
 
+        ensemble_batch_size = self.batch_size - (self.batch_size % self.buffer_count)
+        if self.batch_size % self.buffer_count > 0:
+            logger.info(f"Using batch_size={ensemble_batch_size} for even sampling")
         self.rb = ReplayBufferEnsemble(
-            *self.rbs, batch_size=batch_size * nstep, sample_from_all=True
+            *self.rbs, batch_size=ensemble_batch_size * nstep, sample_from_all=True
         )
 
     def extend(self, data):
