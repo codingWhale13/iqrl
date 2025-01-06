@@ -13,7 +13,7 @@ import hydra
 from hydra.core.config_store import ConfigStore
 from iqrl import iQRLConfig
 from omegaconf import MISSING, OmegaConf
-from torchrl.envs import SerialEnv
+from torchrl.envs import ParallelEnv
 from utils import LUMIConfig, SlurmConfig
 import utils.helper as h
 
@@ -176,8 +176,8 @@ def train(cfg: TrainConfig):
         )
         for body_name, task_name in cfg.envs
     ]
-    env = SerialEnv(env_count, create_env_fn)
-    eval_env = SerialEnv(env_count, create_env_fn)
+    env = ParallelEnv(env_count, create_env_fn)
+    eval_env = ParallelEnv(env_count, create_env_fn)
     video_envs = [
         make_env(
             env_name=body_name,
