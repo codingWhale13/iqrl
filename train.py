@@ -6,16 +6,13 @@ os.environ["MUJOCO_GL"] = "osmesa"
 os.environ["PYOPENGL_PLATFORM"] = "osmesa"
 
 from dataclasses import dataclass, field
-from functools import partial
 from typing import Any, List, Optional
 
 import hydra
 from hydra.core.config_store import ConfigStore
 from iqrl import iQRLConfig
 from omegaconf import MISSING, OmegaConf
-from torchrl.envs import ParallelEnv
 from utils import LUMIConfig, SlurmConfig
-import utils.helper as h
 
 
 def envs_to_name(envs):
@@ -114,16 +111,21 @@ def train(cfg: TrainConfig):
     import logging
     import random
     import time
+    from functools import partial
 
+    from hydra.core.hydra_config import HydraConfig
     import numpy as np
-    import torch
-    from envs import make_env
-    from iqrl import iQRL
+    from termcolor import colored
     from tensordict import pad_sequence
     from tensordict.nn import TensorDictModule
-    from termcolor import colored
     from torchrl.data.tensor_specs import BoundedContinuous
+    from torchrl.envs import ParallelEnv
     from torchrl.record.loggers.wandb import WandbLogger
+    import torch
+
+    from envs import make_env
+    from iqrl import iQRL
+    import utils.helper as h
     from utils import ReplayBuffer
 
     logging.basicConfig(level=logging.DEBUG)
