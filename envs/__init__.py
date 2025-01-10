@@ -43,9 +43,9 @@ class BodyAndTaskIDs(Transform):
 
     def _call(self, tensordict: TensorDictBase) -> TensorDictBase:
         if self.body_id is not None:
-            tensordict["observation"]["body_id"] = self.body_id
+            tensordict["observation"].set("body_id", self.body_id)
         if self.task_id is not None:
-            tensordict["observation"]["task_id"] = self.task_id
+            tensordict["observation"].set("task_id", self.task_id)
         return tensordict
 
     def _reset(

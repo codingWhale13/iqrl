@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 
 
 class ReplayBufferSamples(NamedTuple):
-    observations: TensorDict  # zero-padded to avoid LazyStackedTensorDict
-    actions: torch.Tensor  # zero-padded to avoid torch.nested.tensor
-    next_observations: TensorDict  # zero-padded to avoid LazyStackedTensorDict
+    observations: TensorDict  # Zero-padded to avoid LazyStackedTensorDict
+    actions: torch.Tensor  # Zero-padded to avoid torch.nested.tensor
+    next_observations: TensorDict  # Zero-padded to avoid LazyStackedTensorDict
     dones: torch.Tensor
     terminateds: torch.Tensor
     rewards: torch.Tensor
@@ -120,47 +120,33 @@ def to_nstep(
     batch: ReplayBufferSamples, nstep: int, gamma: float = 0.99
 ) -> ReplayBufferSamples:
     """Form n-step samples (truncate if timeout)"""
-    if nstep > 1:
-        dones = torch.zeros_like(batch.dones[0], dtype=torch.bool)
-        terminateds = torch.zeros_like(batch.terminateds[0], dtype=torch.bool)
-        rewards = torch.zeros_like(batch.rewards[0])
-        next_state_gammas = torch.ones_like(batch.dones[0], dtype=torch.float32)
-        next_obs = torch.zeros_like(batch.observations[0])
-        next_z = torch.zeros_like(batch.next_z[0]) if batch.next_z is not None else None
-        for t in range(nstep):
-            next_obs = torch.where(
-                dones[..., None], next_obs, batch.next_observations[t]
-            )
-            if next_z is not None:
-                next_z = torch.where(dones[..., None], next_z, batch.next_z[t])
-            dones = torch.logical_or(dones, batch.dones[t])
-            next_state_gammas *= torch.where(dones, 1, gamma)
-            terminateds *= torch.where(
-                dones, terminateds, torch.logical_or(terminateds, batch.terminateds[t])
-            )
-            rewards += torch.where(dones, 0, gamma**t * batch.rewards[t])
-        nstep_batch = ReplayBufferSamples(
-            observations=batch.observations[0],
-            actions=batch.actions[0],
-            next_observations=next_obs,
-            dones=dones.to(torch.int),
-            terminateds=terminateds.to(torch.int),
-            rewards=rewards,
-            next_state_gammas=next_state_gammas,
-            z=batch.z[0] if batch.z is not None else None,
-            next_z=next_z,
+    dones = torch.zeros_like(batch.dones[0], dtype=torch.bool)
+    terminateds = torch.zeros_like(batch.terminateds[0], dtype=torch.bool)
+    rewards = torch.zeros_like(batch.rewards[0])
+    next_state_gammas = torch.ones_like(batch.dones[0], dtype=torch.float32)
+    next_obs = torch.zeros_like(batch.observations[0])
+    next_z = torch.zeros_like(batch.next_z[0]) if batch.next_z is not None else None
+    for t in range(nstep):
+        next_obs = torch.where(dones[..., None], next_obs, batch.next_observations[t])
+        if next_z is not None:
+            next_z = torch.where(dones[..., None], next_z, batch.next_z[t])
+        dones = torch.logical_or(dones, batch.dones[t])
+        next_state_gammas *= torch.where(dones, 1, gamma)
+        terminateds *= torch.where(
+            dones, terminateds, torch.logical_or(terminateds, batch.terminateds[t])
         )
-    else:
-        # TODO Can remove this else
-        nstep_batch = ReplayBufferSamples(
-            observations=batch.observations[0],
-            actions=batch.actions[0],
-            next_observations=batch.next_observations[0],
-            dones=batch.dones[0],
-            terminateds=batch.terminateds[0],
-            rewards=batch.rewards[0],
-            next_state_gammas=batch.next_state_gammas[0],
-            z=batch.z[0] if batch.z is not None else None,
-            next_z=batch.next_z[0] if batch.next_z is not None else None,
-        )
+        rewards += torch.where(dones, 0, gamma**t * batch.rewards[t])
+
+    nstep_batch = ReplayBufferSamples(
+        observations=batch.observations[0],
+        actions=batch.actions[0],
+        next_observations=next_obs,
+        dones=dones.to(torch.int),
+        terminateds=terminateds.to(torch.int),
+        rewards=rewards,
+        next_state_gammas=next_state_gammas,
+        z=batch.z[0] if batch.z is not None else None,
+        next_z=next_z,
+    )
+
     return nstep_batch

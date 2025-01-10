@@ -318,8 +318,7 @@ class Encoder(nn.Module):
         ##### Create targets #####
         with torch.no_grad():
             next_obs = batch.next_observations
-            zs_tar = self.encode(next_obs, tar=True)
-            zs_tar = zs_tar["state"]
+            zs_tar = self.encode(next_obs, tar=True)["state"]
 
         ##### Latent rollout #####
         zs = torch.empty_like(zs_tar)

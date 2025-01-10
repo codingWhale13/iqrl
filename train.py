@@ -155,6 +155,9 @@ def train(cfg: TrainConfig):
         save_code=True,
     )
     writer.log_hparams(cfg)
+    writer.log_hparams(
+        {"hydra": OmegaConf.to_container(HydraConfig.get(), throw_on_missing=False)}
+    )
 
     ###### Setup environment for training/evaluation/video recording ######
     body_str_to_id = h.seq_to_1hot([body_name for body_name, _ in cfg.envs])
