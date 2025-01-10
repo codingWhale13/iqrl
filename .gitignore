@@ -7,6 +7,7 @@ tmp/
 wandb
 .hydra
 *.mp4
+output/
 
 *.py[cod]
 *.egg
