@@ -691,7 +691,9 @@ class iQRL(nn.Module):
         self._pi.train()
 
         z = batch.z["state"]
-        pi_loss = -self.Q(z=z, a=self._pi(z), return_type="avg").mean()
+        actions = self._pi(z)
+        actions_masked = actions * batch.observations["act_mask"]
+        pi_loss = -self.Q(z=z, a=actions_masked, return_type="avg").mean()
 
         if not fake:  # Actually perform the optimization step
             ##### Optimize actor #####

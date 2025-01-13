@@ -68,11 +68,72 @@ class BodyAndTaskIDs(Transform):
         raise RuntimeError("BodyAndTaskIDs can only be used with a transformed env")
 
 
+class TaskMasker(Transform):
+    """A transform to add a mask to an env, indicating relevant obs and action dims."""
+
+    def __init__(
+        self,
+        obs_dim: Optional[int],
+        act_dim: Optional[int],
+        max_obs_dim: Optional[int],
+        max_act_dim: Optional[int],
+    ):
+        super().__init__()
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
+        self.max_obs_dim = max_obs_dim
+        self.max_act_dim = max_act_dim
+
+        self.obs_mask = None
+        self.act_mask = None
+        if self.obs_dim is not None and self.max_obs_dim is not None:
+            self.obs_mask = self._make_mask(self.obs_dim, self.max_obs_dim)
+        if self.act_dim is not None and self.max_act_dim is not None:
+            self.act_mask = self._make_mask(self.act_dim, self.max_act_dim)
+
+    def _make_mask(self, relevant_dim: int, mask_dim: int):
+        assert relevant_dim <= mask_dim
+        mask = torch.zeros(mask_dim, dtype=torch.float32)
+        mask[:relevant_dim] = 1.0
+        return mask
+
+    def _call(self, tensordict):
+        if self.obs_mask is not None:
+            tensordict["observation"].set("obs_mask", self.obs_mask)
+        if self.act_mask is not None:
+            tensordict["observation"].set("act_mask", self.act_mask)
+        return tensordict
+
+    def _reset(
+        self, tensordict: TensorDictBase, tensordict_reset: TensorDictBase
+    ) -> TensorDictBase:
+        return self._call(tensordict_reset)
+
+    def transform_observation_spec(self, observation_spec):
+        if self.obs_mask is not None:
+            observation_spec["observation"]["obs_mask"] = Bounded(
+                low=0, high=1, shape=(self.max_obs_dim,), dtype=torch.float
+            )
+        if self.act_dim is not None:
+            observation_spec["observation"]["act_mask"] = Bounded(
+                low=0, high=1, shape=(self.max_act_dim,), dtype=torch.float
+            )
+        return observation_spec
+
+    def forward(self, tensordict: TensorDictBase) -> TensorDictBase:
+        raise RuntimeError("TaskMasker can only be used with a transformed env")
+
+
 def make_env(
     env_name: str,
     task_name: Optional[str] = None,
     body_id: Optional[torch.Tensor] = None,
     task_id: Optional[torch.Tensor] = None,
+    obs_dim: Optional[int] = None,
+    act_dim: Optional[int] = None,
+    max_obs_dim: Optional[int] = None,
+    max_act_dim: Optional[int] = None,
+    use_offline_data: bool = False,
     seed: int = 42,
     from_pixels: bool = True,
     frame_skip: int = 2,
@@ -86,23 +147,26 @@ def make_env(
     if not from_pixels:
         pixels_only = False
 
-    if env_name in gym.envs.registry.keys():
-        env = GymEnv(
-            env_name=env_name,
-            from_pixels=from_pixels,
-            frame_skip=frame_skip,
-            pixels_only=pixels_only,
-            device=device,
-        )
-    elif (env_name, task_name) in suite.ALL_TASKS or env_name == "cup":
-        env = dmcontrol_make_env(
-            env_name=env_name,
-            task_name=task_name,
-            from_pixels=from_pixels or record_video,
-            frame_skip=frame_skip,
-            pixels_only=pixels_only,
-            device=device,
-        )
+    if use_offline_data:
+        env = make_offline_env(env_name=env_name, task_name=task_name, device=device)
+    else:
+        if env_name in gym.envs.registry.keys():
+            env = GymEnv(
+                env_name=env_name,
+                from_pixels=from_pixels,
+                frame_skip=frame_skip,
+                pixels_only=pixels_only,
+                device=device,
+            )
+        elif (env_name, task_name) in suite.ALL_TASKS or env_name == "cup":
+            env = make_dmcontrol_env(
+                env_name=env_name,
+                task_name=task_name,
+                from_pixels=from_pixels or record_video,
+                frame_skip=frame_skip,
+                pixels_only=pixels_only,
+                device=device,
+            )
 
     if not pixels_only:
         env = TransformedEnv(
@@ -112,15 +176,21 @@ def make_env(
                 RenameTransform(in_keys=["state"], out_keys=[("observation", "state")]),
             ),
         )
-    env = TransformedEnv(
-        env,
-        Compose(
-            DoubleToFloat(),
-            StepCounter(),
-            RewardSum(),
-            BodyAndTaskIDs(body_id, task_id),
-        ),
-    )
+    transforms = [
+        DoubleToFloat(),
+        StepCounter(),
+        RewardSum(),
+        BodyAndTaskIDs(body_id, task_id),
+    ]
+    if max_obs_dim is not None or max_act_dim is not None:
+        tm = TaskMasker(
+            obs_dim=obs_dim,
+            act_dim=act_dim,
+            max_obs_dim=max_obs_dim,
+            max_act_dim=max_act_dim,
+        )
+        transforms.append(tm)
+    env = TransformedEnv(env, Compose(*transforms))
 
     if from_pixels:
         env = TransformedEnv(

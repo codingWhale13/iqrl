@@ -201,6 +201,20 @@ def train(cfg: TrainConfig):
         a = np.array(act_specs[i].shape).prod().item()
         ids_to_dims[(body_id, task_id)] = (o, a)
 
+    obs_dims = [obs_spec["state"].shape[0] for obs_spec in obs_specs]
+    act_dims = [act_spec.shape[0] for act_spec in act_specs]
+    # Now that we know the maximal obs and action dims, we can finally create the env
+    create_env_fn = [
+        partial(
+            cef,
+            obs_dim=obs_dims[i],
+            act_dim=act_dims[i],
+            max_obs_dim=max(obs_dims),
+            max_act_dim=max(act_dims),
+        )
+        for i, cef in enumerate(create_env_fn)
+    ]
+
     env = ParallelEnv(env_count, create_env_fn)
     eval_env = ParallelEnv(env_count, create_env_fn)
     video_envs = [
