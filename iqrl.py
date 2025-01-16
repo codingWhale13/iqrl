@@ -110,7 +110,9 @@ class iQRLConfig:
     noise_clip: float = 0.3
 
     """OTHER"""
-    """Logging frequency"""
+    """Call wandb.log() while updating the agent (creates "Charts" section in wandb)"""
+    log_during_update: bool = False  # Avoid memory-intensive logging by default
+    """Logging frequency, only takes effect if log_during_update==True"""
     logging_freq: int = 100
     """If True try to compile all NNs"""
     compile: bool = False
@@ -548,11 +550,12 @@ class iQRL(nn.Module):
                     logger.info(
                         f"Iteration {i} | loss {info['enc_loss']:.3} | tc loss {info['tc_loss']:.3} | reward loss {info['reward_loss']:.3}"
                     )
-                if wandb.run is not None:
+                if wandb.run is not None and self.cfg.log_during_update:
                     wandb.log(info)
 
         ###### Log some stuff ######
-        if wandb.run is not None:
+        info["exploration_noise"] = self.exploration_noise
+        if wandb.run is not None and self.cfg.log_during_update:
             wandb.log({"exploration_noise": self.exploration_noise})
 
         self._exploration_noise_schedule.step()
