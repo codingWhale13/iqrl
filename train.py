@@ -58,6 +58,7 @@ class TrainConfig:
     verbose: bool = False  # if true print training progress
 
     # Evaluation
+    eval_only: bool = False  # Skip training (useful when loading checkpoint)
     eval_every_episodes: int = 20
     num_eval_episodes: int = 10
     capture_eval_video: bool = False  # Fails on AMD GPU so set to False
@@ -132,6 +133,7 @@ def train(cfg: TrainConfig):
     logger = logging.getLogger(__name__)
 
     assert cfg.agent.obs_types == ["state"], "only obs_types=['state'] is supported"
+    assert not cfg.eval_only or cfg.checkpoint is not None, "eval_only needs checkpoint"
 
     ###### Fix seed for reproducibility ######
     random.seed(cfg.seed)
@@ -370,6 +372,8 @@ def train(cfg: TrainConfig):
 
             # Evaluate the initial agent
             _ = evaluate(step=step, episode_idx=episode_idx, start_time=start_time)
+            if cfg.eval_only:
+                break  # Eval is done; close envs and exit
 
         ##### Log episode metrics #####
         num_new_transitions = sum(
