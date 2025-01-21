@@ -27,7 +27,7 @@ class iQRLConfig:
     """How to handle different state and action dims? "padding" or "multi-head" or "attention\""""
     state_action_mode: str = "padding"
     """MLP dims for actor/critic/dynamics"""
-    mlp_dims: List[int] = field(default_factory=lambda: [512, 512])
+    mlp_dims: List[int] = field(default_factory=lambda: [1024, 1024])
     """Learning rate for actor/critic"""
     lr: float = 3e-4
     """Batch size - same for for representation learning and actor/critic"""
