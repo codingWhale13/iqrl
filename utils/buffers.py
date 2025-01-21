@@ -71,10 +71,16 @@ class ReplayBuffer:
             *self.rbs, batch_size=ensemble_batch_size * nstep, sample_from_all=True
         )
 
+    def __len__(self):
+        return sum(len(rb) for rb in self.rbs)
+
     def extend(self, data):
-        assert data.shape[0] == self.buffer_count, "Expected leading dim to be #envs"
-        for i in range(self.buffer_count):
-            self.rb[i].extend(data[i].cpu())
+        assert data.shape[0] % self.buffer_count == 0, "Expected equal contribution"
+        data = data.cpu()
+        data_chunks = data.chunk(self.buffer_count, dim=0)
+        for i, chunk in enumerate(data_chunks):
+            for episode in chunk:
+                self.rb[i].extend(episode)
 
     def sample(
         self,

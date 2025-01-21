@@ -86,6 +86,10 @@ class iQRLConfig:
     use_fsq: bool = True
     """FSQ levels - setting as [8,8] corresponds to a codebook of size 8*8=62=2^8"""
     fsq_levels: List[int] = field(default_factory=lambda: [8, 8])
+    """Use offline data to train and use TD3-BC instead of TD3"""
+    use_offline_data: bool = "${use_offline_data}"  # set from TrainConfig
+    """When using offline data, this is the only additional parameter (see TD3-BC)"""
+    bc_alpha: float = 2.5
 
     """PROJECTION HEAD"""
     """Project the latent using an MLP before calculating the temporal consistency loss?"""
@@ -694,9 +698,15 @@ class iQRL(nn.Module):
         self._pi.train()
 
         z = batch.z["state"]
-        actions = self._pi(z)
-        actions_masked = actions * batch.observations["act_mask"]
-        pi_loss = -self.Q(z=z, a=actions_masked, return_type="avg").mean()
+        pi_actions = self._pi(z) * batch.observations["act_mask"]
+        Q_values = self.Q(z=z, a=pi_actions, return_type="avg")
+
+        if self.cfg.use_offline_data:
+            # Add behavior cloning regularization
+            lmbda = self.cfg.bc_alpha / Q_values.abs().mean().detach()
+            pi_loss = -lmbda * Q_values.mean() + F.mse_loss(pi_actions, batch.actions)
+        else:
+            pi_loss = -Q_values.mean()
 
         if not fake:  # Actually perform the optimization step
             ##### Optimize actor #####

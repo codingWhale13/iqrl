@@ -22,6 +22,7 @@ from torchrl.record import VideoRecorder
 from torchrl.record.loggers import WandbLogger
 
 from .dmcontrol import make_env as dmcontrol_make_env
+from .offline_dummy import OfflineDummyEnv
 
 
 class BodyAndTaskIDs(Transform):
@@ -148,25 +149,24 @@ def make_env(
         pixels_only = False
 
     if use_offline_data:
-        env = make_offline_env(env_name=env_name, task_name=task_name, device=device)
-    else:
-        if env_name in gym.envs.registry.keys():
-            env = GymEnv(
-                env_name=env_name,
-                from_pixels=from_pixels,
-                frame_skip=frame_skip,
-                pixels_only=pixels_only,
-                device=device,
-            )
-        elif (env_name, task_name) in suite.ALL_TASKS or env_name == "cup":
-            env = make_dmcontrol_env(
-                env_name=env_name,
-                task_name=task_name,
-                from_pixels=from_pixels or record_video,
-                frame_skip=frame_skip,
-                pixels_only=pixels_only,
-                device=device,
-            )
+        env = OfflineDummyEnv(obs_dim=obs_dim, act_dim=act_dim, device=device)
+    elif env_name in gym.envs.registry.keys():
+        env = GymEnv(
+            env_name=env_name,
+            from_pixels=from_pixels,
+            frame_skip=frame_skip,
+            pixels_only=pixels_only,
+            device=device,
+        )
+    elif (env_name, task_name) in suite.ALL_TASKS or env_name == "cup":
+        env = dmcontrol_make_env(
+            env_name=env_name,
+            task_name=task_name,
+            from_pixels=from_pixels or record_video,
+            frame_skip=frame_skip,
+            pixels_only=pixels_only,
+            device=device,
+        )
 
     transforms = []
     if not pixels_only:

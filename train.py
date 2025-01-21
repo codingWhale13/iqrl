@@ -46,6 +46,8 @@ class TrainConfig:
     agent: iQRLConfig = field(default_factory=iQRLConfig)
 
     # Experiment
+    use_offline_data: bool = False  # Train fully offline (but evaluate still online)
+    normalize_states: bool = False  # Only takes effect if use_offline_data==True
     max_episode_steps: int = 1000  # Max episode length
     num_episodes: int = 3000  # Number of training episodes (3M env steps)
     random_episodes: int = 10  # Number of random episodes at start
@@ -117,7 +119,7 @@ def train(cfg: TrainConfig):
     from hydra.core.hydra_config import HydraConfig
     import numpy as np
     from termcolor import colored
-    from tensordict import pad_sequence
+    from tensordict import LazyStackedTensorDict, TensorDict, pad_sequence
     from tensordict.nn import TensorDictModule
     from torchrl.data.tensor_specs import BoundedContinuous
     from torchrl.envs import ParallelEnv
@@ -172,14 +174,14 @@ def train(cfg: TrainConfig):
         "pixels_only": False,
         "logger": writer,
     }
-    create_env_fn = [
+    create_fn = [
         partial(
             make_env,
             env_name=body_name,
             task_name=task_name,
             body_id=body_str_to_id[body_name],
             task_id=task_str_to_id[task_name],
-            record_video=False,
+            record_video=False,  # No need, video_envs below will record
             **common_kwargs_for_make_env,
         )
         for body_name, task_name in cfg.envs
@@ -187,38 +189,32 @@ def train(cfg: TrainConfig):
 
     obs_specs = []
     act_specs = []
-    for fn in create_env_fn:
+    for fn in create_fn:
         subenv_dummy = fn()
         obs_specs.append(subenv_dummy.observation_spec["observation"])
         act_specs.append(subenv_dummy.action_spec)
         assert isinstance(
             subenv_dummy.action_spec, BoundedContinuous
-        ), "Only continuous action space is supported"
+        ), "Only continuous actions supported"
+        subenv_dummy.close()
 
-    ids_to_dims = {}  # (body ID, task ID) -> (obs dim, action dim), all integers
-    for i in range(env_count):
-        body_id = np.argmax(body_str_to_id[cfg.envs[i][0]]).item()
-        task_id = np.argmax(task_str_to_id[cfg.envs[i][1]]).item()
-        o = np.array(obs_specs[i]["state"].shape).prod().item()
-        a = np.array(act_specs[i].shape).prod().item()
-        ids_to_dims[(body_id, task_id)] = (o, a)
-
-    obs_dims = [obs_spec["state"].shape[0] for obs_spec in obs_specs]
-    act_dims = [act_spec.shape[0] for act_spec in act_specs]
-    # Now that we know the maximal obs and action dims, we can finally create the env
-    create_env_fn = [
+    od = [obs_spec["state"].shape[0] for obs_spec in obs_specs]
+    ad = [act_spec.shape[0] for act_spec in act_specs]
+    create_fn = [
         partial(
-            cef,
-            obs_dim=obs_dims[i],
-            act_dim=act_dims[i],
-            max_obs_dim=max(obs_dims),
-            max_act_dim=max(act_dims),
+            fn, obs_dim=od[i], act_dim=ad[i], max_obs_dim=max(od), max_act_dim=max(ad)
         )
-        for i, cef in enumerate(create_env_fn)
+        for i, fn in enumerate(create_fn)
     ]
 
-    env = ParallelEnv(env_count, create_env_fn)
-    eval_env = ParallelEnv(env_count, create_env_fn)
+    env = ParallelEnv(
+        env_count,
+        [partial(fn, use_offline_data=cfg.agent.use_offline_data) for fn in create_fn],
+    )
+    eval_env = ParallelEnv(
+        env_count,
+        [partial(fn, use_offline_data=False) for fn in create_fn],
+    )
     video_envs = [
         make_env(
             env_name=body_name,
@@ -226,6 +222,7 @@ def train(cfg: TrainConfig):
             body_id=body_str_to_id[body_name],
             task_id=task_str_to_id[task_name],
             record_video=cfg.capture_eval_video,
+            use_offline_data=False,
             **common_kwargs_for_make_env,
         )
         for body_name, task_name in cfg.envs
@@ -245,6 +242,13 @@ def train(cfg: TrainConfig):
     )
 
     ###### Init agent ######
+    ids_to_dims = {}  # (body ID, task ID) -> (obs dim, action dim), all integers
+    for i in range(env_count):
+        body_id = np.argmax(body_str_to_id[cfg.envs[i][0]]).item()
+        task_id = np.argmax(task_str_to_id[cfg.envs[i][1]]).item()
+        o = np.array(obs_specs[i]["state"].shape).prod().item()
+        a = np.array(act_specs[i].shape).prod().item()
+        ids_to_dims[(body_id, task_id)] = (o, a)
     agent = iQRL(
         cfg=cfg.agent, obs_specs=obs_specs, act_specs=act_specs, ids_to_dims=ids_to_dims
     )
@@ -353,63 +357,126 @@ def train(cfg: TrainConfig):
         writer.log_scalar(name="eval/", value=eval_metrics)
         return eval_metrics
 
+    if cfg.use_offline_data:
+        print("Loading offline data into replay buffer...")
+
+        rollout_blueprint = env.rollout(
+            max_steps=cfg.max_episode_steps // cfg.action_repeat,
+            policy=policy_module,
+            break_when_any_done=True,  # Same-length episodes -> break when done
+        )
+
+        offline_data = []
+        for i in range(env_count):
+            MT30_DATA_DIR = os.path.join(
+                os.environ.get("WRKDIR"), "data", "mt30", "per-task"
+            )
+            file_path = os.path.join(os.path.join(MT30_DATA_DIR, f"{env_names[i]}.pt"))
+            task_data_raw = torch.load(file_path, weights_only=False).to(cfg.device)
+            assert sorted(task_data_raw.keys()) == ["action", "obs", "reward"]
+
+            MAX_EXP = 1000
+            task_data_raw = task_data_raw[:MAX_EXP]  # Avoid too much memory usage
+
+            task_blueprint = rollout_blueprint[i]
+            new_shape = [task_data_raw.shape[0]] + list(task_blueprint.shape)
+
+            task_data = task_blueprint.unsqueeze(0).expand(new_shape)
+            task_data["observation"]["state"] = task_data_raw["obs"][:, :-1]
+            task_data["next"]["observation"]["state"] = task_data_raw["obs"][:, 1:]
+            task_data["action"] = task_data_raw["action"][:, 1:]
+            task_data["reward"] = task_data_raw["reward"][:, 1:]
+            # NOTE: "done" and ("next", "terminated") can remain False all the way, it's fine
+
+            offline_data.append(task_data)
+
+        data = LazyStackedTensorDict.lazy_stack(offline_data, dim=0)
+        data = pad_sequence(data, pad_dim=-1)  # LazyStackedTensorDict -> TensorDict
+        data = data.flatten(0, 1)  # Merge first 2 dims: env_count and episode_count
+
+        if cfg.normalize_states:
+            # Normalize over all states (even across different tasks)
+            eps = 1e-3
+            # States have shape: (episode_count, ep_length, max_state_dim)
+            mean = data["observation"]["state"].mean(dim=(0, 1), keepdims=True)
+            std = data["observation"]["state"].std(dim=(0, 1), keepdims=True) + eps
+            data["observation"]["state"] = (data["observation"]["state"] - mean) / std
+            data["next"]["observation"]["state"] = (
+                data["next"]["observation"]["state"] - mean
+            ) / std
+            print(f"Normalized over all states:\n\tmean={mean}\n\tstd={std})")
+
+        rb.extend(data)
+
     step = 0  # NOTE: 1 step means 1 step per sub-envs
     start_time = time.time()
     for episode_idx in range(cfg.num_episodes):
-        ##### Rollout the policy in the environment #####
-        with torch.no_grad():
-            data = env.rollout(
-                max_steps=cfg.max_episode_steps // cfg.action_repeat,
-                policy=policy_module,
-                break_when_any_done=False,
-            )
-        ##### Add data to the replay buffer #####
-        data = pad_sequence(data, pad_dim=-1)  # LazyStackedTensorDict -> TensorDict
-        rb.extend(data)
+        if not cfg.use_offline_data:
+            ##### Rollout the policy in the environment #####
+            with torch.no_grad():
+                data = env.rollout(
+                    max_steps=cfg.max_episode_steps // cfg.action_repeat,
+                    policy=policy_module,
+                    break_when_any_done=False,
+                )
+            ##### Add data to the replay buffer #####
+            data = pad_sequence(data, pad_dim=-1)  # LazyStackedTensorDict -> TensorDict
+            rb.extend(data)
 
         if episode_idx == 0:
-            print(colored("First episodes data:", "green", attrs=["bold"]), data)
+            if not cfg.use_offline_data:
+                print(colored("First episodes data:", "green", attrs=["bold"]), data)
 
             # Evaluate the initial agent
-            _ = evaluate(step=step, episode_idx=episode_idx, start_time=start_time)
+            _ = evaluate(
+                cfg,
+                step=step,
+                episode_idx=episode_idx,
+                start_time=start_time,
+            )
             if cfg.eval_only:
                 break  # Eval is done; close envs and exit
 
-        ##### Log episode metrics #####
-        num_new_transitions = sum(
-            data["next"]["step_count"][i][-1].cpu().sum().item()
-            for i in range(env_count)
-        )
-        step += num_new_transitions
-        episode_rewards = [
-            data["next"]["episode_reward"][i][-1].cpu().item() for i in range(env_count)
-        ]
-
-        episodic_return_mean = sum(episode_rewards) / env_count
-        if cfg.verbose:
-            logger.info(
-                f"Episode {episode_idx} | Env Step {step*cfg.action_repeat} | "
-                f"Train return (mean over envs) {episodic_return_mean:.2f} | "
-                f"Train return per env {' '.join(map(str, episode_rewards))}"
+        if not cfg.use_offline_data:
+            ##### Log episode metrics #####
+            num_new_transitions = sum(
+                data["next"]["step_count"][i][-1].cpu().sum().item()
+                for i in range(env_count)
             )
-        rollout_metrics = {
-            "episodic_return_mean": episodic_return_mean,
-            "episodic_length": num_new_transitions,
-            "env_step": step * cfg.action_repeat,
-        }
-        rollout_metrics.update({env_name: {} for env_name in env_names})
-        for i in range(env_count):
-            rollout_metrics[env_names[i]]["episodic_return"] = episode_rewards[i]
+            step += num_new_transitions
+            episode_rewards = [
+                data["next"]["episode_reward"][i][-1].cpu().item()
+                for i in range(env_count)
+            ]
 
-        success = data["next"].get("success", None)
-        if success is not None:
-            episode_success = success.any()
-            rollout_metrics.update({"episodic_success": episode_success})
+            episodic_return_mean = sum(episode_rewards) / env_count
+            if cfg.verbose:
+                logger.info(
+                    f"Episode {episode_idx} | Env Step {step*cfg.action_repeat} | "
+                    f"Train return (mean over envs) {episodic_return_mean:.2f} | "
+                    f"Train return per env {' '.join(map(str, episode_rewards))}"
+                )
+            rollout_metrics = {
+                "episodic_return_mean": episodic_return_mean,
+                "episodic_length": num_new_transitions // env_count,
+                "env_step": step * cfg.action_repeat,
+            }
+            rollout_metrics.update({env_name: {} for env_name in env_names})
+            for i in range(env_count):
+                rollout_metrics[env_names[i]]["episodic_return"] = episode_rewards[i]
 
-        writer.log_scalar(name="rollout/", value=rollout_metrics)
+            success = data["next"].get("success", None)
+            if success is not None:
+                episode_success = success.any()
+                rollout_metrics.update({"episodic_success": episode_success})
+
+            writer.log_scalar(name="rollout/", value=rollout_metrics)
+        else:
+            num_new_transitions = 500
+            step += num_new_transitions
 
         ##### Train agent (after collecting some random episodes) #####
-        if episode_idx > cfg.random_episodes - 1:
+        if cfg.use_offline_data or episode_idx > cfg.random_episodes - 1:
             train_metrics = agent.update(
                 replay_buffer=rb, num_new_transitions=num_new_transitions
             )
