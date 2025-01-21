@@ -480,8 +480,6 @@ def train(cfg: TrainConfig):
             train_metrics = agent.update(
                 replay_buffer=rb, num_new_transitions=num_new_transitions
             )
-
-            ##### Log training metrics #####
             writer.log_scalar(name="train/", value=train_metrics)
 
             if episode_idx % 25 == 0:
@@ -495,10 +493,8 @@ def train(cfg: TrainConfig):
                         name=f"train_{env_names[i]}/", value=single_task_metrics
                     )
 
-            ##### Save checkpoint #####
             torch.save({"model": agent.state_dict()}, "./checkpoint")
 
-            ###### Evaluate ######
             if episode_idx % cfg.eval_every_episodes == 0:
                 evaluate(step=step, episode_idx=episode_idx, start_time=start_time)
 

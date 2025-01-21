@@ -24,6 +24,8 @@ from torchrl.record.loggers import WandbLogger
 from .dmcontrol import make_env as dmcontrol_make_env
 from .offline_dummy import OfflineDummyEnv
 
+# NOTE: Transform._call says it's called by step() and reset() but only step() is true
+# That's why _reset is needed below. See also: https://github.com/pytorch/rl/issues/2595
 
 class BodyAndTaskIDs(Transform):
     """A transform to add one-hot encoded body and/or task IDs to an env."""
