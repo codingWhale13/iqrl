@@ -65,6 +65,7 @@ class TrainConfig:
     num_eval_episodes: int = 10
     capture_eval_video: bool = False  # Fails on AMD GPU so set to False
     log_dormant_neuron_ratio: bool = False
+    log_per_task: bool = True  # Run task-specific fake training steps and log results
 
     # W&B config
     use_wandb: bool = False
@@ -281,45 +282,88 @@ def train(cfg: TrainConfig):
     print(colored("Learnable parameters:", "green", attrs=["bold"]), f"{total_params}M")
     print(colored("Architecture:", "green", attrs=["bold"]), agent)
 
-    def evaluate(step: int, episode_idx: int, start_time: float) -> dict:
+    def evaluate(
+        cfg: TrainConfig, step: int, episode_idx: int, start_time: float
+    ) -> dict:
         """Evaluate agent in eval_env and log metrics"""
         eval_metrics = {env_name: {} for env_name in env_names}
         eval_start_time = time.time()
         with torch.no_grad():
-            episodic_returns, episodic_successes = {name: [] for name in env_names}, {
-                name: [] for name in env_names
-            }
+            episodic_returns = {env_name: [] for env_name in env_names}
+            episodic_successes = {env_name: [] for env_name in env_names}
+            states = {env_names[i]: [] for i in range(env_count)}
+            actions = {env_names[i]: [] for i in range(env_count)}
+
             for _ in range(cfg.num_eval_episodes):
                 eval_data = eval_env.rollout(
                     max_steps=cfg.max_episode_steps // cfg.action_repeat,
                     policy=eval_policy_module,
                     break_when_any_done=False,
                 )
-
                 success = eval_data["next"].get("success", None)
+
+                if isinstance(eval_data, TensorDict):
+                    all_states = eval_data["observation"]["state"]
+                    all_actions = eval_data["action"]
+                else:
+                    all_states = eval_data["observation"].get_nestedtensor("state")
+                    all_actions = eval_data.get_nestedtensor("action")
                 for i, env_name in enumerate(env_names):
                     episodic_returns[env_name].append(
                         eval_data["next"]["episode_reward"][i][-1].cpu().item()
                     )
+                    states[env_name].append(all_states[i])
+                    actions[env_name].append(all_actions[i])
 
                     if success is not None:
                         episodic_successes[env_name].append(success[i].any())
 
-            for i, env_name in enumerate(env_names):
-                eval_episodic_return = (
-                    sum(episodic_returns[env_name]) / cfg.num_eval_episodes
-                )
-                eval_metrics[env_name]["episodic_return"] = eval_episodic_return
-            eval_episodic_return_mean = np.mean(
-                [eval_metrics[env_name]["episodic_return"] for env_name in env_names]
-            )
+            episodic_returns = [
+                sum(episodic_returns[name]) / cfg.num_eval_episodes
+                for name in env_names
+            ]
+            eval_episodic_return_mean = np.mean(episodic_returns)
 
             if success is not None:
                 # TODO is episodic_successes being calculated correctly
                 episodic_success = sum(episodic_successes) / cfg.num_eval_episodes
                 eval_metrics.update({"episodic_success": episodic_success})
 
-        ##### Eval metrics #####
+        ##### Task-specific training metrics #####
+        if cfg.log_per_task:
+            for i in range(env_count):
+                task_metrics = agent.fake_update(
+                    replay_buffer=rb, num_new_transitions=500, rb_idx=i
+                )  # Contains min, max, mean, std of encoder gradients
+                task_metrics.update({"eval_episodic_return": episodic_returns[i]})
+
+                task_states = np.array(states[env_names[i]])
+                for dim in range(task_states.shape[-1]):
+                    states_single = task_states[..., dim]
+                    task_metrics.update(
+                        {
+                            f"state_min_{dim=}": states_single.min().item(),
+                            f"state_max_{dim=}": states_single.max().item(),
+                            f"state_mean_{dim=}": states_single.mean().item(),
+                            f"state_std_{dim=}": states_single.std().item(),
+                        }
+                    )
+
+                task_actions = np.array(actions[env_names[i]])
+                for dim in range(task_actions.shape[-1]):
+                    actions_single = task_actions[..., dim]
+                    task_metrics.update(
+                        {
+                            f"action_min_{dim=}": actions_single.min().item(),
+                            f"action_max_{dim=}": actions_single.max().item(),
+                            f"action_mean_{dim=}": actions_single.mean().item(),
+                            f"action_std_{dim=}": actions_single.std().item(),
+                        }
+                    )
+
+                writer.log_scalar(name=f"train_{env_names[i]}/", value=task_metrics)
+
+        ##### Overall eval metrics #####
         eval_metrics.update(
             {
                 "episodic_return_mean": eval_episodic_return_mean,
@@ -496,7 +540,7 @@ def train(cfg: TrainConfig):
             torch.save({"model": agent.state_dict()}, "./checkpoint")
 
             if episode_idx % cfg.eval_every_episodes == 0:
-                evaluate(step=step, episode_idx=episode_idx, start_time=start_time)
+                evaluate(cfg, step=step, episode_idx=episode_idx, start_time=start_time)
 
         # Release some GPU memory (if possible)
         torch.cuda.empty_cache()
