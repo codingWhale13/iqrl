@@ -258,6 +258,9 @@ def train(cfg: TrainConfig):
         state_dict = torch.load(cfg.checkpoint)
         agent.load_state_dict(state_dict["model"])
         logger.info(f"Loaded checkpoint from {cfg.checkpoint}")
+        if cfg.random_episodes != 0:
+            cfg.random_episodes = 0
+            logger.info("Set random_episodes=0 because checkpoint was loaded")
 
     policy_module = TensorDictModule(
         lambda obs: agent.select_action(obs, eval_mode=False),
