@@ -382,8 +382,12 @@ def train(cfg: TrainConfig):
                 f"Eval return (mean over envs) {eval_episodic_return_mean:.2f}"
             )
 
-        when_to_log = [0, cfg.num_episodes // 2, cfg.num_episodes - 1]
-        if cfg.capture_eval_video and episode_idx in when_to_log:
+        ##### If desired, capture video at beginning, midpoint and end of training #####
+        next_eval_idx = episode_idx + cfg.eval_every_episodes
+        is_first = episode_idx == 0
+        is_middle = episode_idx <= cfg.num_episodes // 2 < next_eval_idx
+        is_last = next_eval_idx >= cfg.num_episodes
+        if cfg.capture_eval_video and (is_first or is_middle or is_last):
             with torch.no_grad():
                 for video_env in video_envs:
                     video_env.rollout(
@@ -525,20 +529,7 @@ def train(cfg: TrainConfig):
                 replay_buffer=rb, num_new_transitions=num_new_transitions
             )
             writer.log_scalar(name="train/", value=train_metrics)
-
-            if episode_idx % 25 == 0:
-                for i in range(env_count):
-                    single_task_metrics = agent.fake_update(
-                        replay_buffer=rb,
-                        num_new_transitions=num_new_transitions,
-                        rb_idx=i,
-                    )
-                    writer.log_scalar(
-                        name=f"train_{env_names[i]}/", value=single_task_metrics
-                    )
-
             torch.save({"model": agent.state_dict()}, "./checkpoint")
-
             if episode_idx % cfg.eval_every_episodes == 0:
                 evaluate(cfg, step=step, episode_idx=episode_idx, start_time=start_time)
 
