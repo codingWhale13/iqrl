@@ -168,20 +168,16 @@ def make_env(
                 device=device,
             )
 
+    transforms = []
     if not pixels_only:
-        env = TransformedEnv(
-            env,
-            Compose(
-                RenameTransform(in_keys=["observation"], out_keys=["state"]),
-                RenameTransform(in_keys=["state"], out_keys=[("observation", "state")]),
-            ),
+        transforms.append(RenameTransform(in_keys=["observation"], out_keys=["state"]))
+        transforms.append(
+            RenameTransform(in_keys=["state"], out_keys=[("observation", "state")])
         )
-    transforms = [
-        DoubleToFloat(),
-        StepCounter(),
-        RewardSum(),
-        BodyAndTaskIDs(body_id, task_id),
-    ]
+    transforms.append(DoubleToFloat())
+    transforms.append(StepCounter())
+    transforms.append(RewardSum())
+    transforms.append(BodyAndTaskIDs(body_id, task_id))
     if max_obs_dim is not None or max_act_dim is not None:
         tm = TaskMasker(
             obs_dim=obs_dim,
@@ -190,22 +186,15 @@ def make_env(
             max_act_dim=max_act_dim,
         )
         transforms.append(tm)
-    env = TransformedEnv(env, Compose(*transforms))
 
     if from_pixels:
-        env = TransformedEnv(
-            env,
-            Compose(
-                ToTensorImage(in_keys="pixels"),
-                Resize(render_size, render_size),
-                # RenameTransform(in_keys="pixels", out_keys=("observation", "pixels")),
-                RenameTransform(
-                    in_keys=["pixels"], out_keys=[("observation", "pixels")]
-                ),
-                CatFrames(
-                    N=num_frames_to_stack, dim=-3, in_keys=("observation", "pixels")
-                ),
-            ),
+        transforms.append(ToTensorImage(in_keys="pixels"))
+        transforms.append(Resize(render_size, render_size))
+        transforms.append(
+            RenameTransform(in_keys=["pixels"], out_keys=[("observation", "pixels")])
+        )
+        transforms.append(
+            CatFrames(N=num_frames_to_stack, dim=-3, in_keys=("observation", "pixels"))
         )
         video_rec_in_keys = ("observation", "pixels")
     else:
@@ -214,13 +203,15 @@ def make_env(
     if record_video:
         if logger is None:
             logger = WandbLogger(exp_name="", log_dir="./logs")
-        env = TransformedEnv(
-            env,
+        transforms.append(
             VideoRecorder(
                 logger=logger,
                 tag=f"run_video_{env_name}-{task_name}",
                 in_keys=video_rec_in_keys,
-            ),
+            )
         )
+
+    env = TransformedEnv(env, Compose(*transforms))
     env.set_seed(seed)
+
     return env
