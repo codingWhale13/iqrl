@@ -367,7 +367,7 @@ def train(cfg: TrainConfig):
                         }
                     )
 
-                writer.log_scalar(name=f"train_{env_names[i]}/", value=task_metrics)
+                writer.log_scalar(name=f"{env_names[i]}/", value=task_metrics)
 
         ##### Overall eval metrics #####
         eval_metrics.update(
