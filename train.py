@@ -341,7 +341,8 @@ def train(cfg: TrainConfig):
                 task_metrics = agent.fake_update(
                     replay_buffer=rb, num_new_transitions=500, rb_idx=i
                 )  # Contains min, max, mean, std of encoder gradients
-                task_metrics.update({"eval_episodic_return": episodic_returns[i]})
+                task_metrics["eval_episodic_return"] = episodic_returns[i]
+                task_metrics["env_step"] = step * cfg.action_repeat
 
                 task_states = np.array(states[env_names[i]])
                 for dim in range(task_states.shape[-1]):
@@ -533,6 +534,7 @@ def train(cfg: TrainConfig):
             train_metrics = agent.update(
                 replay_buffer=rb, num_new_transitions=num_new_transitions
             )
+            train_metrics["env_step"] = step * cfg.action_repeat
             writer.log_scalar(name="train/", value=train_metrics)
             torch.save({"model": agent.state_dict()}, "./checkpoint")
             if episode_idx % cfg.eval_every_episodes == 0:
