@@ -45,11 +45,9 @@ class TrainConfig:
     # Agent (overridden by defaults list)
     agent: iQRLConfig = field(default_factory=iQRLConfig)
 
-    # Experiment
-    use_offline_data: bool = False  # Train fully offline (but evaluate still online)
-    normalize_states: bool = False  # Only takes effect if use_offline_data==True
+    # Experiment: General parameters
     max_episode_steps: int = 1000  # Max episode length
-    num_episodes: int = 3000  # Number of training episodes (3M env steps)
+    num_episodes: int = 1000  # Number of training episodes (1M env steps)
     random_episodes: int = 10  # Number of random episodes at start
     action_repeat: int = 2
     buffer_size: int = 10_000_000
@@ -58,6 +56,11 @@ class TrainConfig:
     checkpoint: Optional[str] = None  # /file/path/to/checkpoint
     device: str = "cuda"  # "cpu" or "cuda" etc
     verbose: bool = False  # if true print training progress
+
+    # Experiment: Offline data
+    use_offline_data: bool = False  # Train fully offline (but evaluate still online)
+    normalize_states: bool = False  # Only takes effect if use_offline_data==True
+    max_offline_episodes_per_task = 1000  # Limit offline episodes to reduce memory
 
     # Evaluation
     eval_only: bool = False  # Skip training (useful when loading checkpoint)
@@ -426,8 +429,7 @@ def train(cfg: TrainConfig):
             task_data_raw = torch.load(file_path, weights_only=False).to(cfg.device)
             assert sorted(task_data_raw.keys()) == ["action", "obs", "reward"]
 
-            MAX_EXP = 1000
-            task_data_raw = task_data_raw[:MAX_EXP]  # Avoid too much memory usage
+            task_data_raw = task_data_raw[: cfg.max_offline_episodes_per_task]
 
             task_blueprint = rollout_blueprint[i]
             new_shape = [task_data_raw.shape[0]] + list(task_blueprint.shape)
