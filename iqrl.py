@@ -88,6 +88,8 @@ class iQRLConfig:
     fsq_levels: List[int] = field(default_factory=lambda: [8, 8])
     """Use offline data to train and use TD3-BC instead of TD3"""
     use_offline_data: bool = "${use_offline_data}"  # Set from TrainConfig
+    """States are normalized per-task"""
+    normalize_states: bool = "${normalize_states}"  # Set from TrainConfig
     """When using offline data, this is the only additional parameter (see TD3-BC)"""
     bc_alpha: float = 2.5
 
@@ -515,6 +517,8 @@ class iQRL(nn.Module):
         self.critic_update_counter = 0
         self.pi_update_counter = 0
 
+        self.state_norm = None  # If cfg.normalize_states==True, will be set later
+
     def update(self, replay_buffer: ReplayBuffer, num_new_transitions: int) -> dict:
         """Update representation and TD3 at same time"""
         num_updates = int(num_new_transitions * self.cfg.utd_ratio)
@@ -723,15 +727,36 @@ class iQRL(nn.Module):
             "actor_update_counter": self.pi_update_counter,
         }
 
+    def set_state_norm(self, state_norm: dict):
+        self.state_norm = state_norm  # (body_id, task_id)->(mean, std)
+
     @torch.no_grad()
-    def select_action(self, obs: TensorDict, eval_mode: bool = False):
+    def select_action(self, obs: TensorDictBase, eval_mode: bool = False):
+        if self.cfg.normalize_states and self.state_norm is not None:
+            # Normalize states (no need to pad though; this will be done by the encoder)
+            use_nested_tensor = isinstance(obs, LazyStackedTensorDict)
+            if use_nested_tensor:
+                state = obs.get_nestedtensor("state")
+            else:
+                state = obs["state"]
+            normalized_states = []
+            num_states = state.size(0)  # This works for both tensor and nested tensor
+            for i in range(num_states):
+                body_id = np.argmax(obs["body_id"][i]).item()
+                task_id = np.argmax(obs["task_id"][i]).item()
+                mean, std = self.state_norm[(body_id, task_id)]
+                normalized_states.append((state[i] - mean) / std)
+            if use_nested_tensor:
+                obs["state"] = torch.nested.nested_tensor(normalized_states)
+            else:
+                obs["state"] = torch.stack(normalized_states)
+
         is_flat_obs = False
         if obs.batch_size == torch.Size([]):
             obs = obs.view(1)
             is_flat_obs = True
 
         z = self.encoder.encode(obs, tar=False).to(torch.float)
-
         a = self.pi(z["state"], tar=False, eval_mode=eval_mode)
 
         if is_flat_obs:

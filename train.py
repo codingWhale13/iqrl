@@ -422,6 +422,7 @@ def train(cfg: TrainConfig):
         )
 
         offline_data = []
+        state_normalization = {}  # Needed during eval if cfg.normalize_states==True
         for i in range(env_count):
             MT30_DATA_DIR = os.path.join(
                 os.environ.get("WRKDIR"), "data", "mt30", "per-task"
@@ -441,24 +442,30 @@ def train(cfg: TrainConfig):
             task_data["action"] = task_data_raw["action"][:, 1:]
             task_data["reward"] = task_data_raw["reward"][:, 1:]
             # NOTE: "done" and ("next", "terminated") can remain False all the way, it's fine
+            if cfg.normalize_states:
+                # Normalize over all states of this specific body&task combination
+                # States shape is (episode_count, ep_length, max_state_dim) -> dim=(0, 1)
+                mean = task_data["observation"]["state"].mean(dim=(0, 1))
+                std = task_data["observation"]["state"].std(dim=(0, 1)) + 1e-3
+                task_data["observation"]["state"] = (
+                    task_data["observation"]["state"] - mean
+                ) / std
+                task_data["next"]["observation"]["state"] = (
+                    task_data["next"]["observation"]["state"] - mean
+                ) / std
+
+                body_id = np.argmax(body_str_to_id[cfg.envs[i][0]]).item()
+                task_id = np.argmax(task_str_to_id[cfg.envs[i][1]]).item()
+                state_normalization[(body_id, task_id)] = (mean, std)
 
             offline_data.append(task_data)
+
+        if cfg.normalize_states:
+            agent.set_state_norm(state_normalization)
 
         data = LazyStackedTensorDict.lazy_stack(offline_data, dim=0)
         data = pad_sequence(data, pad_dim=-1)  # LazyStackedTensorDict -> TensorDict
         data = data.flatten(0, 1)  # Merge first 2 dims: env_count and episode_count
-
-        if cfg.normalize_states:
-            # Normalize over all states (even across different tasks)
-            eps = 1e-3
-            # States have shape: (episode_count, ep_length, max_state_dim)
-            mean = data["observation"]["state"].mean(dim=(0, 1), keepdims=True)
-            std = data["observation"]["state"].std(dim=(0, 1), keepdims=True) + eps
-            data["observation"]["state"] = (data["observation"]["state"] - mean) / std
-            data["next"]["observation"]["state"] = (
-                data["next"]["observation"]["state"] - mean
-            ) / std
-            print(f"Normalized over all states:\n\tmean={mean}\n\tstd={std})")
 
         rb.extend(data)
 
