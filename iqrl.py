@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import utils
 import utils.helper as h
 import wandb
-from tensordict import TensorDict
+from tensordict import LazyStackedTensorDict, TensorDict, TensorDictBase
 from torchrl.data import Bounded, CompositeSpec
 from utils import ReplayBuffer, ReplayBufferSamples
 
@@ -259,18 +259,18 @@ class Encoder(nn.Module):
         if cfg.use_rew_loss:
             self._reward = h.mlp(cfg.latent_dim + max_act_dim, cfg.mlp_dims, 1)
 
-    def encode(self, obs, tar: bool = False):
+    def encode(self, obs: TensorDictBase, tar: bool = False):
         if "pixels" in self.cfg.obs_types:
             raise NotImplementedError()
         zs = {}
         if self.cfg.state_action_mode == "padding":
             ids = [x for x in (obs.get("body_id"), obs.get("task_id")) if x is not None]
             for key in self._encoder.keys():
-                if isinstance(obs, TensorDict):
-                    obs_tensor = obs[key]
-                else:
+                if isinstance(obs, LazyStackedTensorDict):
                     obs_tensor = obs.get_nestedtensor(key).to_padded_tensor(padding=0.0)
-                p1d = (0, self.obs_dim - obs_tensor.shape[-1])
+                else:
+                    obs_tensor = obs[key]
+                p1d = (0, self.obs_dim - obs_tensor.shape[-1])  # No assumptions for obs
                 obs_padded = F.pad(obs_tensor, p1d, "constant", 0.0)
                 obs_with_ids = torch.cat(ids + [obs_padded], dim=-1).to(self.cfg.device)
                 if tar:
