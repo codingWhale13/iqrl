@@ -69,6 +69,7 @@ class TrainConfig:
     num_eval_episodes: int = 10
     capture_eval_video: bool = False  # Fails on AMD GPU so set to False
     log_dormant_neuron_ratio: bool = False
+    log_per_task: bool = False  # Log state&act ranges (in any case, log per-task eval)
 
     # W&B config
     use_wandb: bool = False
@@ -324,11 +325,12 @@ def train(cfg: TrainConfig):
                     if success is not None:
                         episodic_successes[env_name].append(success[i].any())
 
-            episodic_returns = [
-                sum(episodic_returns[name]) / cfg.num_eval_episodes
-                for name in env_names
-            ]
-            eval_episodic_return_mean = np.mean(episodic_returns)
+            for i, env_name in enumerate(env_names):
+                ep_return = sum(episodic_returns[env_name]) / cfg.num_eval_episodes
+                eval_metrics[env_name]["episodic_return"] = ep_return
+            eval_episodic_return_mean = np.mean(
+                [eval_metrics[env_name]["episodic_return"] for env_name in env_names]
+            )
 
             if success is not None:
                 # TODO is episodic_successes being calculated correctly
@@ -341,7 +343,6 @@ def train(cfg: TrainConfig):
                 task_metrics = agent.fake_update(
                     replay_buffer=rb, num_new_transitions=500, rb_idx=i
                 )  # Contains min, max, mean, std of encoder gradients
-                task_metrics["eval_episodic_return"] = episodic_returns[i]
                 task_metrics["env_step"] = step * cfg.action_repeat
 
                 task_states = np.array(states[env_names[i]])
@@ -441,7 +442,8 @@ def train(cfg: TrainConfig):
             task_data["next"]["observation"]["state"] = task_data_raw["obs"][:, 1:]
             task_data["action"] = task_data_raw["action"][:, 1:]
             task_data["reward"] = task_data_raw["reward"][:, 1:]
-            # NOTE: "done" and ("next", "terminated") can remain False all the way, it's fine
+            # "done" and ("next", "terminated") remain False all the way, it's fine
+
             if cfg.normalize_states:
                 # Normalize over all states of this specific body&task combination
                 # States shape is (episode_count, ep_length, max_state_dim) -> dim=(0, 1)
