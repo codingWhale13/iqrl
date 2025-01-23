@@ -61,6 +61,7 @@ class TrainConfig:
     use_offline_data: bool = False  # Train fully offline (but evaluate still online)
     normalize_states: bool = False  # Only takes effect if use_offline_data==True
     max_offline_episodes_per_task = 1000  # Limit offline episodes to reduce memory
+    max_offline_episodes_per_task: int = 1000  # Limit offline episodes to reduce memory
 
     # Evaluation
     eval_only: bool = False  # Skip training (useful when loading checkpoint)
@@ -68,7 +69,6 @@ class TrainConfig:
     num_eval_episodes: int = 10
     capture_eval_video: bool = False  # Fails on AMD GPU so set to False
     log_dormant_neuron_ratio: bool = False
-    log_per_task: bool = True  # Run task-specific fake training steps and log results
 
     # W&B config
     use_wandb: bool = False
