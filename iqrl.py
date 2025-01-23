@@ -87,7 +87,7 @@ class iQRLConfig:
     """FSQ levels - setting as [8,8] corresponds to a codebook of size 8*8=62=2^8"""
     fsq_levels: List[int] = field(default_factory=lambda: [8, 8])
     """Use offline data to train and use TD3-BC instead of TD3"""
-    use_offline_data: bool = "${use_offline_data}"  # set from TrainConfig
+    use_offline_data: bool = "${use_offline_data}"  # Set from TrainConfig
     """When using offline data, this is the only additional parameter (see TD3-BC)"""
     bc_alpha: float = 2.5
 
@@ -121,9 +121,9 @@ class iQRLConfig:
     """If True try to compile all NNs"""
     compile: bool = False
     """All NNs will be put on this device"""
-    device: str = "${device}"  # set from TrainConfig
+    device: str = "${device}"  # Set from TrainConfig
     """Print training losses?"""
-    verbose: bool = "${verbose}"  # set from TrainConfig
+    verbose: bool = "${verbose}"  # Set from TrainConfig
 
 
 class Actor(nn.Module):
