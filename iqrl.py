@@ -26,6 +26,10 @@ class iQRLConfig:
 
     """How to handle different state and action dims? "padding" or "multi-head" or "attention\""""
     state_action_mode: str = "padding"
+    """Condition policy on body and task IDs"""
+    condition_actor: bool = True
+    """Condition critic(s) on body and task IDs"""
+    condition_critic: bool = True
     """MLP dims for actor/critic/dynamics"""
     mlp_dims: List[int] = field(default_factory=lambda: [1024, 1024])
     """Learning rate for actor/critic"""
@@ -133,6 +137,7 @@ class Actor(nn.Module):
         self,
         cfg: iQRLConfig,
         act_dim: int,
+        ids_dim: int,
         action_scale,
         action_bias,
         act_low,
@@ -144,22 +149,26 @@ class Actor(nn.Module):
         self.action_bias = action_bias
         self.act_low = act_low
         self.act_high = act_high
-        self.mlp = h.mlp(self.cfg.latent_dim, self.cfg.mlp_dims, act_dim)
+        in_dim = self.cfg.latent_dim + (ids_dim if cfg.condition_actor else 0)
+        self.mlp = h.mlp(in_dim, self.cfg.mlp_dims, act_dim)
 
-    def forward(self, z):
-        a = self.mlp(z)
+    def forward(self, z: torch.Tensor, ids: list[torch.Tensor]):
+        x = torch.cat([z] + ids, -1) if self.cfg.condition_actor else z
+        a = self.mlp(x)
         a = torch.tanh(a)
         a = a * self.action_scale + self.action_bias
         return a
 
 
 class Critic(nn.Module):
-    def __init__(self, cfg: iQRLConfig, act_dim: int):
+    def __init__(self, cfg: iQRLConfig, act_dim: int, ids_dim: int):
         super().__init__()
         self.cfg = cfg
+
+        in_dim = cfg.latent_dim + act_dim + (ids_dim if cfg.condition_critic else 0)
         qs = [
             h.mlp(
-                cfg.latent_dim + act_dim,
+                in_dim=in_dim,
                 mlp_dims=cfg.mlp_dims,
                 out_dim=1,
                 dropout=cfg.q_dropout,
@@ -171,8 +180,14 @@ class Critic(nn.Module):
 
         self.qs = h.Ensemble(qs)
 
-    def forward(self, z, a, return_type: str = "all"):
-        x = torch.cat([z, a], -1)
+    def forward(
+        self,
+        z: torch.Tensor,
+        a: torch.Tensor,
+        ids: list[torch.Tensor],
+        return_type: str = "all",
+    ):
+        x = torch.cat([z, a] + ids if self.cfg.condition_critic else [z, a], -1)
         qs = self.qs(x)
         if return_type == "all":
             return qs
@@ -266,15 +281,15 @@ class Encoder(nn.Module):
             raise NotImplementedError()
         zs = {}
         if self.cfg.state_action_mode == "padding":
-            ids = [x for x in (obs.get("body_id"), obs.get("task_id")) if x is not None]
+            ids = h.get_ids(obs=obs, device=self.cfg.device)
             for key in self._encoder.keys():
                 if isinstance(obs, LazyStackedTensorDict):
                     obs_tensor = obs.get_nestedtensor(key).to_padded_tensor(padding=0.0)
                 else:
                     obs_tensor = obs[key]
                 p1d = (0, self.obs_dim - obs_tensor.shape[-1])  # No assumptions for obs
-                obs_padded = F.pad(obs_tensor, p1d, "constant", 0.0)
-                obs_with_ids = torch.cat(ids + [obs_padded], dim=-1).to(self.cfg.device)
+                obs_padded = F.pad(obs_tensor, p1d, "constant", 0.0).to(self.cfg.device)
+                obs_with_ids = torch.cat(ids + [obs_padded], dim=-1)
                 if tar:
                     zs[key] = self._encoder_tar[key](obs_with_ids)
                 else:
@@ -456,6 +471,12 @@ class iQRL(nn.Module):
         self.ids_to_dims = ids_to_dims
         self.act_dims = [act_spec.shape[0] for act_spec in act_specs]
 
+        ids_dim = sum(
+            np.array(obs_specs[0][id_name].shape).prod().item()
+            for id_name in ["body_id", "task_id"]
+            if id_name in obs_specs[0].keys()
+        )
+
         max_act_dim = -1
         # Idea: use single-dimensional low and high; will be broadcasted during clipping
         act_spec_lo = act_specs[0].low[0]
@@ -487,6 +508,7 @@ class iQRL(nn.Module):
         self._pi = Actor(
             cfg,
             act_dim=max_act_dim,
+            ids_dim=ids_dim,
             action_scale=(act_spec_hi - act_spec_lo).to(cfg.device) / 2.0,
             action_bias=(act_spec_hi + act_spec_lo).to(cfg.device) / 2.0,
             act_low=act_spec_lo,
@@ -497,7 +519,7 @@ class iQRL(nn.Module):
         self._pi_tar = torch.compile(pi_tar, mode="default") if cfg.compile else pi_tar
 
         ##### Init critics and their target networks #####
-        Q = Critic(cfg, act_dim=max_act_dim).to(cfg.device)
+        Q = Critic(cfg, act_dim=max_act_dim, ids_dim=ids_dim).to(cfg.device)
         self.Q = torch.compile(Q, mode="default") if cfg.compile else Q
         Q_tar = copy.deepcopy(self.Q).requires_grad_(False)
         self.Q_tar = torch.compile(Q_tar, mode="default") if cfg.compile else Q_tar
@@ -650,13 +672,15 @@ class iQRL(nn.Module):
         assert batch.next_z is not None
 
         # Make Q target
+        ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
         with torch.no_grad():
             z = batch.z["state"]
             next_z = batch.next_z["state"]
             a = batch.actions
-            a_next = self.pi(next_z, tar=True, eval_mode=True, smooth=True)
+            a_next = self.pi(next_z, ids, tar=True, eval_mode=True, smooth=True)
 
-            min_q_next_tar = self.Q_tar(z=next_z, a=a_next, return_type="min")[..., 0]
+            min_q_next_tar = self.Q_tar(z=next_z, a=a_next, ids=ids, return_type="min")
+            min_q_next_tar = min_q_next_tar[..., 0]
 
             assert min_q_next_tar.shape == batch.rewards.shape
             next_q_value = (
@@ -664,7 +688,7 @@ class iQRL(nn.Module):
                 + (1 - batch.terminateds) * batch.next_state_gammas * min_q_next_tar
             )
 
-        q_values = self.Q(z, a=a, return_type="all")[..., 0]
+        q_values = self.Q(z, a=a, ids=ids, return_type="all")[..., 0]
         next_q_value = next_q_value.broadcast_to(q_values.shape)
         q_loss = F.mse_loss(q_values, next_q_value)
 
@@ -702,8 +726,10 @@ class iQRL(nn.Module):
         self._pi.train()
 
         z = batch.z["state"]
-        pi_actions = self._pi(z) * batch.observations["act_mask"]
-        Q_values = self.Q(z=z, a=pi_actions, return_type="avg")
+        ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
+
+        pi_actions = self._pi(z, ids) * batch.observations["act_mask"]
+        Q_values = self.Q(z=z, a=pi_actions, ids=ids, return_type="avg")
 
         if self.cfg.use_offline_data:
             # Add behavior cloning regularization
@@ -757,7 +783,8 @@ class iQRL(nn.Module):
             is_flat_obs = True
 
         z = self.encoder.encode(obs, tar=False).to(torch.float)
-        a = self.pi(z["state"], tar=False, eval_mode=eval_mode)
+        ids = h.get_ids(obs=obs, device=self.cfg.device)
+        a = self.pi(z["state"], ids, tar=False, eval_mode=eval_mode)
 
         if is_flat_obs:
             body_id = np.argmax(obs["body_id"][0]).item()
@@ -774,8 +801,15 @@ class iQRL(nn.Module):
                 td = torch.nested.nested_tensor(action_tensors)  # Nested tensor works
             return td
 
-    def pi(self, z, tar: bool = False, eval_mode: bool = False, smooth: bool = False):
-        a = self._pi_tar(z) if tar else self._pi(z)
+    def pi(
+        self,
+        z: torch.Tensor,
+        ids: list[torch.Tensor],
+        tar: bool = False,
+        eval_mode: bool = False,
+        smooth: bool = False,
+    ):
+        a = self._pi_tar(z, ids) if tar else self._pi(z, ids)
         if not eval_mode:
             a += torch.normal(0, self._pi.action_scale * self.exploration_noise)
         if smooth:

@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import utils
+from tensordict import TensorDictBase
 from torch.func import functional_call, stack_module_state
 from torch.linalg import cond, matrix_rank
 from vector_quantize_pytorch import FSQ as _FSQ
@@ -336,3 +337,9 @@ def seq_to_1hot(keys: Sequence[str]):
             str_to_id[key] = nn.functional.one_hot(torch.tensor(next_id), n)
             next_id += 1
     return str_to_id
+
+
+def get_ids(obs: TensorDictBase, device: str) -> list[torch.Tensor]:
+    return [
+        x.to(device) for x in (obs.get("body_id"), obs.get("task_id")) if x is not None
+    ]
