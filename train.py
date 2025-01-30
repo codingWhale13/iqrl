@@ -47,7 +47,7 @@ class TrainConfig:
 
     # Experiment: General parameters
     max_episode_steps: int = 1000  # Max episode length
-    num_episodes: int = 1000  # Number of training episodes (1M env steps)
+    num_episodes: int = 1000  # Number of training episodes per environment
     random_episodes: int = 10  # Number of random episodes at start
     action_repeat: int = 2
     buffer_size: int = 10_000_000
