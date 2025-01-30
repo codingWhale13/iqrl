@@ -26,10 +26,11 @@ class iQRLConfig:
 
     """How to handle different state and action dims? "padding" or "multi-head" or "attention\""""
     state_action_mode: str = "padding"
-    """Condition policy on body and task IDs"""
-    condition_actor: bool = True
-    """Condition critic(s) on body and task IDs"""
-    condition_critic: bool = True
+    """Condition {encoder, transition dynamics, actor, critic} on body & task IDs"""
+    condition_encoder: bool = "${condition_encoder}"  # Set from TrainConfig
+    condition_dynamics: bool = "${condition_dynamics}"  # Set from TrainConfig
+    condition_actor: bool = "${condition_actor}"  # Set from TrainConfig
+    condition_critic: bool = "${condition_critic}"  # Set from TrainConfig
     """MLP dims for actor/critic/dynamics"""
     mlp_dims: List[int] = field(default_factory=lambda: [1024, 1024])
     """Learning rate for actor/critic"""
@@ -252,9 +253,9 @@ class Encoder(nn.Module):
             self._encoder.update(
                 {
                     "state": h.mlp(
-                        self.obs_dim + ids_dim,
-                        cfg.enc_mlp_dims,
-                        cfg.latent_dim,
+                        in_dim=self.obs_dim + (ids_dim if cfg.condition_encoder else 0),
+                        mlp_dims=cfg.enc_mlp_dims,
+                        out_dim=cfg.latent_dim,
                         dropout=cfg.enc_dropout,
                     )
                 }
@@ -264,7 +265,13 @@ class Encoder(nn.Module):
         if cfg.use_tar_enc:
             self._encoder_tar = copy.deepcopy(self._encoder).requires_grad_(False)
 
-        self._trans = h.mlp(cfg.latent_dim + max_act_dim, cfg.mlp_dims, cfg.latent_dim)
+        self._trans = h.mlp(
+            in_dim=cfg.latent_dim
+            + max_act_dim
+            + (ids_dim if cfg.condition_dynamics else 0),
+            mlp_dims=cfg.mlp_dims,
+            out_dim=cfg.latent_dim,
+        )
 
         if cfg.use_latent_projection:
             if cfg.proj_dim is None:
@@ -281,7 +288,6 @@ class Encoder(nn.Module):
             raise NotImplementedError()
         zs = {}
         if self.cfg.state_action_mode == "padding":
-            ids = h.get_ids(obs=obs, device=self.cfg.device)
             for key in self._encoder.keys():
                 if isinstance(obs, LazyStackedTensorDict):
                     obs_tensor = obs.get_nestedtensor(key).to_padded_tensor(padding=0.0)
@@ -289,11 +295,13 @@ class Encoder(nn.Module):
                     obs_tensor = obs[key]
                 p1d = (0, self.obs_dim - obs_tensor.shape[-1])  # No assumptions for obs
                 obs_padded = F.pad(obs_tensor, p1d, "constant", 0.0).to(self.cfg.device)
-                obs_with_ids = torch.cat(ids + [obs_padded], dim=-1)
+                if self.cfg.condition_encoder:
+                    ids = h.get_ids(obs=obs, device=self.cfg.device)
+                    obs_padded = torch.cat(ids + [obs_padded], dim=-1)
                 if tar:
-                    zs[key] = self._encoder_tar[key](obs_with_ids)
+                    zs[key] = self._encoder_tar[key](obs_padded)
                 else:
-                    zs[key] = self._encoder[key](obs_with_ids)
+                    zs[key] = self._encoder[key](obs_padded)
         elif self.cfg.state_action_mode == "multi-head":
             raise NotImplementedError()
         elif self.cfg.state_action_mode == "attention":
@@ -312,8 +320,8 @@ class Encoder(nn.Module):
             td.update(self.quantize(z))
         return td
 
-    def trans(self, z, a):
-        za = torch.concat([z, a], -1)
+    def trans(self, z, a, ids: torch.Tensor):
+        za = torch.concat(([z, a, ids] if self.cfg.condition_dynamics else [z, a]), -1)
         delta_z = self._trans(za)
         next_z = z + delta_z if self.cfg.use_delta else delta_z
         return next_z
@@ -355,7 +363,8 @@ class Encoder(nn.Module):
             )
 
             # Predict next latent
-            next_z_pred = self.trans(z=z, a=a[t])
+            ids = h.get_ids(obs=batch.observations, device=self.cfg.device)[0]
+            next_z_pred = self.trans(z=z, a=a[t], ids=ids)
             if self.cfg.use_fsq:
                 next_z_pred = self.quantize(next_z_pred)["state"]
 

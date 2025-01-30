@@ -46,6 +46,10 @@ class TrainConfig:
     agent: iQRLConfig = field(default_factory=iQRLConfig)
 
     # Experiment: General parameters
+    condition_encoder: bool = True  # Condition encoder on body & task IDs
+    condition_dynamics: bool = True  # Condition transition dynamics on body & task IDs
+    condition_actor: bool = True  # Condition actor on body & task IDs
+    condition_critic: bool = True  # Condition critic on body & task IDs
     max_episode_steps: int = 1000  # Max episode length
     num_episodes: int = 1000  # Number of training episodes per environment
     random_episodes: int = 10  # Number of random episodes at start
