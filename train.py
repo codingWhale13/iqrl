@@ -73,6 +73,7 @@ class TrainConfig:
     capture_eval_video: bool = False  # Fails on AMD GPU so set to False
     log_dormant_neuron_ratio: bool = False
     log_per_task: bool = False  # Log state&act ranges (in any case, log per-task eval)
+    visualize_latent_states: bool = True  # Visualize latent state space using t-SNE
 
     # W&B config
     use_wandb: bool = False
@@ -125,7 +126,11 @@ def train(cfg: TrainConfig):
     from functools import partial
 
     from hydra.core.hydra_config import HydraConfig
+    import matplotlib.pyplot as plt
     import numpy as np
+    import pandas as pd
+    import seaborn as sns
+    from sklearn.manifold import TSNE
     from termcolor import colored
     from tensordict import LazyStackedTensorDict, TensorDict, pad_sequence
     from tensordict.nn import TensorDictModule
@@ -133,6 +138,7 @@ def train(cfg: TrainConfig):
     from torchrl.envs import ParallelEnv
     from torchrl.record.loggers.wandb import WandbLogger
     import torch
+    import wandb
 
     from envs import make_env
     from iqrl import iQRL
@@ -394,20 +400,53 @@ def train(cfg: TrainConfig):
                 f"Eval return (mean over envs) {eval_episodic_return_mean:.2f}"
             )
 
-        ##### If desired, capture video at beginning, midpoint and end of training #####
+        ##### If desired, log videos and plots at beginning, midpoint and end of training #####
         next_eval_idx = episode_idx + cfg.eval_every_episodes
         is_first = episode_idx == 0
         is_middle = episode_idx <= cfg.num_episodes // 2 < next_eval_idx
-        is_last = next_eval_idx >= cfg.num_episodes
-        if cfg.capture_eval_video and (is_first or is_middle or is_last):
-            with torch.no_grad():
-                for video_env in video_envs:
-                    video_env.rollout(
-                        max_steps=cfg.max_episode_steps // cfg.action_repeat,
-                        policy=eval_policy_module,
-                        break_when_any_done=False,
-                    )
-                    video_env.transform.dump()
+        is_last = episode_idx == cfg.num_episodes  # Corresponds to final eval call
+        if is_first or is_middle or is_last:
+            if cfg.capture_eval_video:
+                with torch.no_grad():
+                    for video_env in video_envs:
+                        video_env.rollout(
+                            max_steps=cfg.max_episode_steps // cfg.action_repeat,
+                            policy=eval_policy_module,
+                            break_when_any_done=False,
+                        )
+                        video_env.transform.dump()
+
+            if cfg.visualize_latent_states:
+                data = pad_sequence(eval_data, pad_dim=-1)  # Pad latest eval iter
+                n = data.shape[1]  # Samples per env
+
+                with torch.no_grad():
+                    latent_states = agent.encoder.encode(data["observation"])["state"]
+                    # t-SNE expects (n_samples, n_features) -> (env_count*n, latent_dim)
+                    latent_states = latent_states.flatten(0, 1).cpu().numpy()
+
+                tsne = TSNE(verbose=1, max_iter=5000)
+                tsne_results = tsne.fit_transform(latent_states)
+                env_idx = [env_names[i] for i in range(env_count) for _ in range(n)]
+                tsne_data = pd.DataFrame(
+                    {
+                        "Env Name": env_idx,
+                        "t-SNE dim 1": tsne_results[:, 0],
+                        "t-SNE dim 2": tsne_results[:, 1],
+                    }
+                )
+
+                plt.figure(figsize=(16, 10))
+                tsne_plot = sns.scatterplot(
+                    x="t-SNE dim 1",
+                    y="t-SNE dim 2",
+                    hue="Env Name",
+                    palette=sns.color_palette("husl", env_count),
+                    data=tsne_data,
+                    legend="full",
+                    alpha=0.7,
+                )
+                wandb.log({"tsne_latent_states": wandb.Image(tsne_plot.get_figure())})
 
         ##### Log rank of latent and active codebook percent #####
         batch = rb.sample(batch_size=agent.encoder.cfg.latent_dim)
