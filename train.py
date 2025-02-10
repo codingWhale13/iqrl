@@ -281,19 +281,19 @@ def train(cfg: TrainConfig):
     )
 
     ##### Print information about run #####
-    steps = (cfg.num_episodes * cfg.max_episode_steps) / 1e6
+    mstep = (cfg.num_episodes * cfg.max_episode_steps) / 1e6
     total_params = int(agent.total_params / 1e6)
     writer.log_hparams({"total_params": agent.total_params})
     print(colored("Envs:", "yellow", attrs=["bold"]), "_".join(env_names))
     print(colored("Number of episodes:", "yellow", attrs=["bold"]), cfg.num_episodes)
-    print(colored("Max number of env. steps:", "yellow", attrs=["bold"]), steps, "M")
+    print(colored("Max number of env. steps:", "yellow", attrs=["bold"]), mstep, "M")
     print(colored("Action repeat:", "green", attrs=["bold"]), cfg.action_repeat)
     print(colored("Device:", "green", attrs=["bold"]), cfg.device)
     print(colored("Learnable parameters:", "green", attrs=["bold"]), f"{total_params}M")
     print(colored("Architecture:", "green", attrs=["bold"]), agent)
 
     def evaluate(
-        cfg: TrainConfig, step: int, episode_idx: int, start_time: float
+        cfg: TrainConfig, steps: list[int], episode_idx: int, start_time: float
     ) -> dict:
         """Evaluate agent in eval_env and log metrics"""
         eval_metrics = {env_name: {} for env_name in env_names}
@@ -331,6 +331,7 @@ def train(cfg: TrainConfig):
             for i, env_name in enumerate(env_names):
                 ep_return = sum(episodic_returns[env_name]) / cfg.num_eval_episodes
                 eval_metrics[env_name]["episodic_return"] = ep_return
+                eval_metrics[env_name]["env_step"] = steps[i] * cfg.action_repeat
             eval_episodic_return_mean = np.mean(
                 [eval_metrics[env_name]["episodic_return"] for env_name in env_names]
             )
@@ -346,7 +347,7 @@ def train(cfg: TrainConfig):
                 task_metrics = agent.fake_update(
                     replay_buffer=rb, num_new_transitions=500, rb_idx=i
                 )  # Contains min, max, mean, std of encoder gradients
-                task_metrics["env_step"] = step * cfg.action_repeat
+                task_metrics["env_step"] = steps[i] * cfg.action_repeat
 
                 task_states = np.array(states[env_names[i]])
                 for dim in range(task_states.shape[-1]):
@@ -379,10 +380,10 @@ def train(cfg: TrainConfig):
             {
                 "episodic_return_mean": eval_episodic_return_mean,
                 "elapsed_time": time.time() - start_time,
-                "SPS": int(step / (time.time() - start_time)),
+                "SPS": int(sum(steps) / (time.time() - start_time)),
                 "episode_time": (time.time() - eval_start_time) / cfg.num_eval_episodes,
-                "env_step": step * cfg.action_repeat,
-                "step": step,
+                "env_step_total": sum(steps) * cfg.action_repeat,
+                "step": sum(steps),
                 "episode": episode_idx,
             }
         )
@@ -474,7 +475,7 @@ def train(cfg: TrainConfig):
 
         rb.extend(data)
 
-    step = 0  # NOTE: 1 step means 1 step per sub-envs
+    steps = [0 for _ in range(env_count)]  # Some envs might step more than others
     start_time = time.time()
     for episode_idx in range(cfg.num_episodes):
         if not cfg.use_offline_data:
@@ -495,21 +496,19 @@ def train(cfg: TrainConfig):
 
             # Evaluate the initial agent
             _ = evaluate(
-                cfg,
-                step=step,
-                episode_idx=episode_idx,
-                start_time=start_time,
+                cfg, steps=steps, episode_idx=episode_idx, start_time=start_time
             )
             if cfg.eval_only:
                 break  # Eval is done; close envs and exit
 
         if not cfg.use_offline_data:
             ##### Log episode metrics #####
-            num_new_transitions = sum(
-                data["next"]["step_count"][i][-1].cpu().sum().item()
-                for i in range(env_count)
-            )
-            step += num_new_transitions
+            num_new_transitions = 0
+            for i in range(env_count):
+                step_count_i = data["next"]["step_count"][i][-1].cpu().sum().item()
+                steps[i] += step_count_i
+                num_new_transitions += step_count_i
+
             episode_rewards = [
                 data["next"]["episode_reward"][i][-1].cpu().item()
                 for i in range(env_count)
@@ -518,14 +517,15 @@ def train(cfg: TrainConfig):
             episodic_return_mean = sum(episode_rewards) / env_count
             if cfg.verbose:
                 logger.info(
-                    f"Episode {episode_idx} | Env Step {step*cfg.action_repeat} | "
+                    f"Episode {episode_idx} | "
+                    f"Env Step {sum(steps)*cfg.action_repeat} | "
                     f"Train return (mean over envs) {episodic_return_mean:.2f} | "
                     f"Train return per env {' '.join(map(str, episode_rewards))}"
                 )
             rollout_metrics = {
                 "episodic_return_mean": episodic_return_mean,
                 "episodic_length": num_new_transitions // env_count,
-                "env_step": step * cfg.action_repeat,
+                "env_step": sum(steps) * cfg.action_repeat,
             }
             rollout_metrics.update({env_name: {} for env_name in env_names})
             for i in range(env_count):
@@ -538,25 +538,30 @@ def train(cfg: TrainConfig):
 
             writer.log_scalar(name="rollout/", value=rollout_metrics)
         else:
-            num_new_transitions = 500
-            step += num_new_transitions
+            for i in range(env_count):
+                steps[i] += 1  # Avoid logging more than once per step
 
         ##### Train agent (after collecting some random episodes) #####
         if cfg.use_offline_data or episode_idx > cfg.random_episodes - 1:
             train_metrics = agent.update(
                 replay_buffer=rb, num_new_transitions=num_new_transitions
             )
-            train_metrics["env_step"] = step * cfg.action_repeat
+            train_metrics["env_step"] = sum(steps) * cfg.action_repeat
             writer.log_scalar(name="train/", value=train_metrics)
             torch.save({"model": agent.state_dict()}, "./checkpoint")
             if episode_idx % cfg.eval_every_episodes == 0:
-                evaluate(cfg, step=step, episode_idx=episode_idx, start_time=start_time)
+                evaluate(
+                    cfg,
+                    steps=steps,
+                    episode_idx=episode_idx,
+                    start_time=start_time,
+                )
 
         # Release some GPU memory (if possible)
         torch.cuda.empty_cache()
 
     # Evaluate the final agent
-    _ = evaluate(step=step)
+    _ = evaluate(cfg, steps=steps, episode_idx=cfg.num_episodes, start_time=start_time)
 
     env.close()
     eval_env.close()
