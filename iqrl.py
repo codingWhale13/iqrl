@@ -320,8 +320,8 @@ class Encoder(nn.Module):
             td.update(self.quantize(z))
         return td
 
-    def trans(self, z, a, ids: torch.Tensor):
-        za = torch.concat(([z, a, ids] if self.cfg.condition_dynamics else [z, a]), -1)
+    def trans(self, z, a, ids: list[torch.Tensor]):
+        za = torch.concat(([z, a] + ids if self.cfg.condition_dynamics else [z, a]), -1)
         delta_z = self._trans(za)
         next_z = z + delta_z if self.cfg.use_delta else delta_z
         return next_z
@@ -356,6 +356,7 @@ class Encoder(nn.Module):
         z = self.encode(batch.observations[0])["state"]
         dones = torch.zeros_like(batch.dones[0], dtype=torch.bool)
         terminateds_or_dones = torch.zeros_like(batch.dones, dtype=torch.bool)
+        ids = h.get_ids(obs=batch.observations[0], device=self.cfg.device)
         for t in range(self.cfg.horizon):
             dones = torch.where(terminateds_or_dones[t], dones, batch.dones[t])
             terminateds_or_dones[t] = torch.logical_or(
@@ -363,7 +364,6 @@ class Encoder(nn.Module):
             )
 
             # Predict next latent
-            ids = h.get_ids(obs=batch.observations, device=self.cfg.device)[0]
             next_z_pred = self.trans(z=z, a=a[t], ids=ids)
             if self.cfg.use_fsq:
                 next_z_pred = self.quantize(next_z_pred)["state"]
