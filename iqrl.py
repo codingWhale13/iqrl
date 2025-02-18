@@ -25,7 +25,7 @@ class iQRLConfig:
     """Config for iQRL"""
 
     """How to handle different state and action dims? "padding" or "multi-head" or "attention\""""
-    state_action_mode: str = "padding"
+    state_action_mode: str = "${state_action_mode}"  # Set from TrainConfig
     """Condition {encoder, transition dynamics, actor, critic} on body & task IDs"""
     condition_encoder: bool = "${condition_encoder}"  # Set from TrainConfig
     condition_dynamics: bool = "${condition_dynamics}"  # Set from TrainConfig

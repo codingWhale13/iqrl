@@ -46,6 +46,7 @@ class TrainConfig:
     agent: iQRLConfig = field(default_factory=iQRLConfig)
 
     # Experiment: General parameters
+    state_action_mode: str = "padding"  # Specifies how to handle ragged env dims
     condition_encoder: bool = True  # Condition encoder on body & task IDs
     condition_dynamics: bool = True  # Condition transition dynamics on body & task IDs
     condition_actor: bool = True  # Condition actor on body & task IDs
