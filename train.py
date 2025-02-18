@@ -151,6 +151,7 @@ def train(cfg: TrainConfig):
 
     assert cfg.agent.obs_types == ["state"], "only obs_types=['state'] is supported"
     assert not cfg.eval_only or cfg.checkpoint is not None, "eval_only needs checkpoint"
+    assert cfg.state_action_mode in ["padding", "multi-head", "attention"]
 
     ###### Fix seed for reproducibility ######
     random.seed(cfg.seed)

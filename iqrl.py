@@ -137,20 +137,15 @@ class Actor(nn.Module):
     def __init__(
         self,
         cfg: iQRLConfig,
+        in_dim: int,
         act_dim: int,
-        ids_dim: int,
-        action_scale,
-        action_bias,
-        act_low,
-        act_high,
+        action_scale: float,
+        action_bias: float,
     ):
         super().__init__()
         self.cfg = cfg
         self.action_scale = action_scale
         self.action_bias = action_bias
-        self.act_low = act_low
-        self.act_high = act_high
-        in_dim = self.cfg.latent_dim + (ids_dim if cfg.condition_actor else 0)
         self.mlp = h.mlp(in_dim, self.cfg.mlp_dims, act_dim)
 
     def forward(self, z: torch.Tensor, ids: list[torch.Tensor]):
@@ -162,11 +157,10 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, cfg: iQRLConfig, act_dim: int, ids_dim: int):
+    def __init__(self, cfg: iQRLConfig, in_dim: int):
         super().__init__()
         self.cfg = cfg
 
-        in_dim = cfg.latent_dim + act_dim + (ids_dim if cfg.condition_critic else 0)
         qs = [
             h.mlp(
                 in_dim=in_dim,
@@ -209,33 +203,10 @@ class Critic(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(
-        self,
-        cfg: iQRLConfig,
-        obs_specs: list[CompositeSpec],
-        act_specs: list[Bounded],
-    ):
+    def __init__(self, cfg: iQRLConfig, obs_dim: int, act_dim: int, ids_dim: int):
         super().__init__()
         self.cfg = cfg
-
-        if cfg.state_action_mode == "padding":
-            od, ad = -1, -1  # Determine maximal observation and action dimensionality
-            for i in range(len(obs_specs)):
-                od = max(od, np.array(obs_specs[i]["state"].shape).prod().item())
-                ad = max(ad, np.array(act_specs[i].shape).prod().item())
-            self.obs_dim = od
-            max_act_dim = ad
-            ids_dim = sum(
-                np.array(obs_specs[0][id_name].shape).prod().item()
-                for id_name in ["body_id", "task_id"]
-                if id_name in obs_specs[0].keys()
-            )
-        elif cfg.state_action_mode == "multi-head":
-            raise NotImplementedError()
-        elif cfg.state_action_mode == "attention":
-            raise NotImplementedError()
-        else:
-            raise ValueError(f"'state_action_mode'={cfg.state_action_mode} not found")
+        self.obs_dim = obs_dim
 
         ##### Configure FSQ stuff #####
         if cfg.use_fsq:
@@ -267,7 +238,7 @@ class Encoder(nn.Module):
 
         self._trans = h.mlp(
             in_dim=cfg.latent_dim
-            + max_act_dim
+            + act_dim
             + (ids_dim if cfg.condition_dynamics else 0),
             mlp_dims=cfg.mlp_dims,
             out_dim=cfg.latent_dim,
@@ -281,7 +252,7 @@ class Encoder(nn.Module):
                 self._proj_tar = copy.deepcopy(self._proj).requires_grad_(False)
 
         if cfg.use_rew_loss:
-            self._reward = h.mlp(cfg.latent_dim + max_act_dim, cfg.mlp_dims, 1)
+            self._reward = h.mlp(cfg.latent_dim + act_dim, cfg.mlp_dims, 1)
 
     def encode(self, obs: TensorDictBase, tar: bool = False):
         if "pixels" in self.cfg.obs_types:
@@ -478,37 +449,35 @@ class iQRL(nn.Module):
 
         self.cfg = cfg
         self.ids_to_dims = ids_to_dims
-        self.act_dims = [act_spec.shape[0] for act_spec in act_specs]
 
+        ##### Assert observation types (1d low and high; broadcasted later) #####
+        act_spec_lo = act_specs[0].low[0]
+        act_spec_hi = act_specs[0].high[0]
+        # Make sure that the value ranges for actions are the same across all tasks
+        for act_spec in act_specs:
+            assert (act_spec.low == act_spec_lo).all(), "Inconsistent action range"
+            assert (act_spec.high == act_spec_hi).all(), "Inconsistent action range"
+        self.register_buffer("act_spec_low", act_spec_lo.to(cfg.device))
+        self.register_buffer("act_spec_high", act_spec_hi.to(cfg.device))
+
+        ##### Assert observation types #####
+        if "pixels" in cfg.obs_types or "state" not in cfg.obs_types:
+            raise NotImplementedError("Need to use state observations")
+
+        ##### Calculate max dims of observations, actions and body&task IDs #####
+        obs_dim = max(np.prod(obs["state"].shape).item() for obs in obs_specs)
+        self.act_dims = [np.prod(act_spec.shape).item() for act_spec in act_specs]
+        act_dim = max(self.act_dims)
         ids_dim = sum(
             np.array(obs_specs[0][id_name].shape).prod().item()
             for id_name in ["body_id", "task_id"]
             if id_name in obs_specs[0].keys()
         )
 
-        max_act_dim = -1
-        # Idea: use single-dimensional low and high; will be broadcasted during clipping
-        act_spec_lo = act_specs[0].low[0]
-        act_spec_hi = act_specs[0].high[0]
-        for act_spec in act_specs:
-            max_act_dim = max(max_act_dim, np.array(act_spec.shape).prod().item())
-            # Make sure that the value ranges for actions are the same across all tasks
-            assert (act_spec.low == act_spec_lo).all(), "Inconsistent action range"
-            assert (act_spec.high == act_spec_hi).all(), "Inconsistent action range"
-        self.register_buffer("act_spec_low", act_spec_lo.to(cfg.device))
-        self.register_buffer("act_spec_high", act_spec_hi.to(cfg.device))
-
-        if "pixels" in cfg.obs_types:
-            raise NotImplementedError
-
-        ##### Calculate dimensions for MLPs #####
-        if "state" not in cfg.obs_types:
-            raise NotImplementedError("Need to use state observations")
-
         ##### Init encoder #####
-        self.encoder = Encoder(cfg, obs_specs=obs_specs, act_specs=act_specs).to(
-            cfg.device
-        )
+        self.encoder = Encoder(
+            cfg, obs_dim=obs_dim, act_dim=act_dim, ids_dim=ids_dim
+        ).to(cfg.device)
         if cfg.compile:
             self.encoder = torch.compile(self.encoder, mode="default")
         self.enc_opt = torch.optim.AdamW(self.encoder.parameters(), lr=cfg.enc_lr)
@@ -516,19 +485,20 @@ class iQRL(nn.Module):
         ##### Init actor network and its target network #####
         self._pi = Actor(
             cfg,
-            act_dim=max_act_dim,
-            ids_dim=ids_dim,
+            in_dim=self.cfg.latent_dim + (ids_dim if cfg.condition_actor else 0),
+            act_dim=act_dim,
             action_scale=(act_spec_hi - act_spec_lo).to(cfg.device) / 2.0,
             action_bias=(act_spec_hi + act_spec_lo).to(cfg.device) / 2.0,
-            act_low=act_spec_lo,
-            act_high=act_spec_hi,
         ).to(cfg.device)
         self._pi = torch.compile(self._pi, mode="default") if cfg.compile else self._pi
         pi_tar = copy.deepcopy(self._pi).requires_grad_(False)
         self._pi_tar = torch.compile(pi_tar, mode="default") if cfg.compile else pi_tar
 
         ##### Init critics and their target networks #####
-        Q = Critic(cfg, act_dim=max_act_dim, ids_dim=ids_dim).to(cfg.device)
+        Q = Critic(
+            cfg,
+            in_dim=cfg.latent_dim + act_dim + (ids_dim if cfg.condition_critic else 0),
+        ).to(cfg.device)
         self.Q = torch.compile(Q, mode="default") if cfg.compile else Q
         Q_tar = copy.deepcopy(self.Q).requires_grad_(False)
         self.Q_tar = torch.compile(Q_tar, mode="default") if cfg.compile else Q_tar
