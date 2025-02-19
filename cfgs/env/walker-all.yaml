@@ -1,0 +1,9 @@
+# @package _global_
+defaults:
+  - medium
+  - _self_
+
+envs:
+  - ["walker", "stand"]
+  - ["walker", "walk"]
+  - ["walker", "run"]
