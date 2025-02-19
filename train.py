@@ -47,7 +47,9 @@ class TrainConfig:
 
     # Experiment: General parameters
     state_action_mode: str = "padding"  # Specifies how to handle ragged env dims
-    condition_encoder: bool = True  # Condition encoder on body & task IDs
+    use_obs_encoder: bool = True  # Used in original iQRL, thus defaults to True
+    use_action_encoder: bool = False  # Not in original iQRL, thus defaults to False
+    condition_encoders: bool = True  # Condition encoders on body & task IDs
     condition_dynamics: bool = True  # Condition transition dynamics on body & task IDs
     condition_actor: bool = True  # Condition actor on body & task IDs
     condition_critic: bool = True  # Condition critic on body & task IDs
@@ -423,9 +425,9 @@ def train(cfg: TrainConfig):
                 n = data.shape[1]  # Samples per env
 
                 with torch.no_grad():
-                    latent_states = agent.encoder.encode(data["observation"])["state"]
+                    latent_states = agent.encoder.encode_obs(data["observation"])
                     # t-SNE expects (n_samples, n_features) -> (env_count*n, latent_dim)
-                    latent_states = latent_states.flatten(0, 1).cpu().numpy()
+                    latent_states = latent_states["state"].flatten(0, 1).cpu().numpy()
 
                 tsne = TSNE(verbose=1, max_iter=5000)
                 tsne_results = tsne.fit_transform(latent_states)

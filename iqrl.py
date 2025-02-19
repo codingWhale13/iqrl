@@ -26,8 +26,12 @@ class iQRLConfig:
 
     """How to handle different state and action dims? "padding" or "multi-head" or "attention\""""
     state_action_mode: str = "${state_action_mode}"  # Set from TrainConfig
-    """Condition {encoder, transition dynamics, actor, critic} on body & task IDs"""
-    condition_encoder: bool = "${condition_encoder}"  # Set from TrainConfig
+    """Map environment states to latent states before using them in other components"""
+    use_obs_encoder: bool = "${use_obs_encoder}"  # Set from TrainConfig
+    """Map policy actions to latent actions before using them in dynamics and critic"""
+    use_action_encoder: bool = "${use_action_encoder}"  # Set from TrainConfig
+    """Condition {encoders, transition dynamics, actor, critic} on body & task IDs"""
+    condition_encoders: bool = "${condition_encoders}"  # Set from TrainConfig
     condition_dynamics: bool = "${condition_dynamics}"  # Set from TrainConfig
     condition_actor: bool = "${condition_actor}"  # Set from TrainConfig
     condition_critic: bool = "${condition_critic}"  # Set from TrainConfig
@@ -55,8 +59,10 @@ class iQRLConfig:
     obs_types: List[str] = field(default_factory=lambda: ["state"])
 
     """ENCODER CONFIG"""
-    """Size of latent space"""
+    """Size of latent state space"""
     latent_dim: int = 512
+    """Size of latent action space is the largest action dim multiplied by this"""
+    latent_action_dim_factor: int = 1
     """Horizon used for representation learning"""
     horizon: int = 5
     """Discount factor for representation learning"""
@@ -148,8 +154,8 @@ class Actor(nn.Module):
         self.action_bias = action_bias
         self.mlp = h.mlp(in_dim, self.cfg.mlp_dims, act_dim)
 
-    def forward(self, z: torch.Tensor, ids: list[torch.Tensor]):
-        x = torch.cat([z] + ids, -1) if self.cfg.condition_actor else z
+    def forward(self, s: torch.Tensor, ids: list[torch.Tensor]):
+        x = torch.cat([s] + ids, -1) if self.cfg.condition_actor else s
         a = self.mlp(x)
         a = torch.tanh(a)
         a = a * self.action_scale + self.action_bias
@@ -177,12 +183,12 @@ class Critic(nn.Module):
 
     def forward(
         self,
-        z: torch.Tensor,
+        s: torch.Tensor,
         a: torch.Tensor,
         ids: list[torch.Tensor],
         return_type: str = "all",
     ):
-        x = torch.cat([z, a] + ids if self.cfg.condition_critic else [z, a], -1)
+        x = torch.cat([s, a] + ids if self.cfg.condition_critic else [s, a], -1)
         qs = self.qs(x)
         if return_type == "all":
             return qs
@@ -203,76 +209,83 @@ class Critic(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, cfg: iQRLConfig, obs_dim: int, act_dim: int, ids_dim: int):
+    def __init__(
+        self,
+        cfg: iQRLConfig,
+        obs_dim: int,
+        act_dim: int,
+        latent_obs_dim: int,
+        latent_act_dim: int,
+        ids_dim: int,
+    ):
         super().__init__()
         self.cfg = cfg
         self.obs_dim = obs_dim
 
         ##### Configure FSQ stuff #####
         if cfg.use_fsq:
-            self.num_channels = len(cfg.fsq_levels)
-            if not cfg.latent_dim % self.num_channels == 0:
-                raise NotImplementedError(
-                    "latent_dim must be divisible by number of FSQ channels"
-                )
             self._fsq = h.FSQ(levels=cfg.fsq_levels)
-            self.cfg.latent_dim *= self.num_channels
 
-        ##### Init encoder #####
+        ##### Init encoders #####
         self._encoder = nn.ModuleDict()
-        if "state" in cfg.obs_types:  # Encoder for state-based observations
-            self._encoder.update(
-                {
-                    "state": h.mlp(
-                        in_dim=self.obs_dim + (ids_dim if cfg.condition_encoder else 0),
-                        mlp_dims=cfg.enc_mlp_dims,
-                        out_dim=cfg.latent_dim,
-                        dropout=cfg.enc_dropout,
-                    )
-                }
+        if "state" in cfg.obs_types and cfg.use_obs_encoder:
+            self._encoder["state"] = h.mlp(
+                in_dim=obs_dim + (ids_dim if cfg.condition_encoders else 0),
+                mlp_dims=cfg.enc_mlp_dims,
+                out_dim=latent_obs_dim,
+                dropout=cfg.enc_dropout,
             )
-        if "pixels" in cfg.obs_types:  # Encoder for pixel-based observations
-            raise ValueError("Pixel-based observations are currently not supported")
+        if cfg.use_action_encoder:
+            self._encoder["action"] = h.mlp(
+                in_dim=act_dim + (ids_dim if cfg.condition_encoders else 0),
+                mlp_dims=cfg.enc_mlp_dims,
+                out_dim=latent_act_dim,
+                dropout=cfg.enc_dropout,
+            )
         if cfg.use_tar_enc:
             self._encoder_tar = copy.deepcopy(self._encoder).requires_grad_(False)
 
+        ##### Init dynamics transition model #####
         self._trans = h.mlp(
-            in_dim=cfg.latent_dim
-            + act_dim
+            in_dim=latent_obs_dim
+            + latent_act_dim
             + (ids_dim if cfg.condition_dynamics else 0),
             mlp_dims=cfg.mlp_dims,
-            out_dim=cfg.latent_dim,
+            out_dim=latent_obs_dim,
         )
 
+        ##### Init optional models #####
         if cfg.use_latent_projection:
             if cfg.proj_dim is None:
-                cfg.proj_dim = int(self.cfg.latent_dim / 16)
-            self._proj = h.mlp(cfg.latent_dim, cfg.mlp_dims, cfg.proj_dim)
+                cfg.proj_dim = int(latent_obs_dim / 16)
+            self._proj = h.mlp(latent_obs_dim, cfg.mlp_dims, cfg.proj_dim)
             if cfg.use_tar_enc:
                 self._proj_tar = copy.deepcopy(self._proj).requires_grad_(False)
 
         if cfg.use_rew_loss:
-            self._reward = h.mlp(cfg.latent_dim + act_dim, cfg.mlp_dims, 1)
+            self._reward = h.mlp(latent_obs_dim + latent_act_dim, cfg.mlp_dims, 1)
 
-    def encode(self, obs: TensorDictBase, tar: bool = False):
+    def encode_obs(self, obs: TensorDictBase, tar: bool = False) -> TensorDictBase:
+        if not self.cfg.use_obs_encoder:
+            return obs  # Identity mapping
+
         if "pixels" in self.cfg.obs_types:
             raise NotImplementedError()
         zs = {}
         if self.cfg.state_action_mode == "padding":
-            for key in self._encoder.keys():
-                if isinstance(obs, LazyStackedTensorDict):
-                    obs_tensor = obs.get_nestedtensor(key).to_padded_tensor(padding=0.0)
-                else:
-                    obs_tensor = obs[key]
-                p1d = (0, self.obs_dim - obs_tensor.shape[-1])  # No assumptions for obs
-                obs_padded = F.pad(obs_tensor, p1d, "constant", 0.0).to(self.cfg.device)
-                if self.cfg.condition_encoder:
-                    ids = h.get_ids(obs=obs, device=self.cfg.device)
-                    obs_padded = torch.cat(ids + [obs_padded], dim=-1)
-                if tar:
-                    zs[key] = self._encoder_tar[key](obs_padded)
-                else:
-                    zs[key] = self._encoder[key](obs_padded)
+            if isinstance(obs, LazyStackedTensorDict):
+                obs_tensor = obs.get_nestedtensor("state").to_padded_tensor(padding=0.0)
+            else:
+                obs_tensor = obs["state"]
+            p1d = (0, self.obs_dim - obs_tensor.shape[-1])  # No assumptions for obs
+            obs_padded = F.pad(obs_tensor, p1d, "constant", 0.0).to(self.cfg.device)
+            if self.cfg.condition_encoders:
+                ids = h.get_ids(obs=obs, device=self.cfg.device)
+                obs_padded = torch.cat(ids + [obs_padded], dim=-1)
+            if tar:
+                zs["state"] = self._encoder_tar["state"](obs_padded)
+            else:
+                zs["state"] = self._encoder["state"](obs_padded)
         elif self.cfg.state_action_mode == "multi-head":
             raise NotImplementedError()
         elif self.cfg.state_action_mode == "attention":
@@ -291,23 +304,40 @@ class Encoder(nn.Module):
             td.update(self.quantize(z))
         return td
 
-    def trans(self, z, a, ids: list[torch.Tensor]):
-        za = torch.concat(([z, a] + ids if self.cfg.condition_dynamics else [z, a]), -1)
-        delta_z = self._trans(za)
-        next_z = z + delta_z if self.cfg.use_delta else delta_z
-        return next_z
+    def encode_action(
+        self, action: torch.Tensor, ids: list[torch.Tensor], tar: bool = False
+    ) -> torch.Tensor:
+        if not self.cfg.use_action_encoder:
+            return action  # Identity mapping
 
-    def reward(self, z, a):
-        za = torch.concat([z, a], -1)
-        r = self._reward(za)
+        # NOTE: No padding required because action comes from padded replay buffer
+        if self.cfg.condition_encoders:
+            action = torch.cat(ids + [action], dim=-1)
+
+        if tar:
+            za = self._encoder_tar["action"](action)
+        else:
+            za = self._encoder["action"](action)
+
+        return za  # NOTE: actions are not being quantized currently
+
+    def trans(self, s: torch.Tensor, a: torch.Tensor, ids: list[torch.Tensor]):
+        sa = torch.concat(([s, a] + ids if self.cfg.condition_dynamics else [s, a]), -1)
+        delta_s = self._trans(sa)
+        next_s = s + delta_s if self.cfg.use_delta else delta_s
+        return next_s
+
+    def reward(self, s: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
+        sa = torch.concat([s, a], -1)
+        r = self._reward(sa)
         return r
 
-    def project(self, z, tar: bool = False):
-        """Project latent state before calculating consistency loss"""
-        z = self._proj_tar(z) if tar else self._proj(z)
-        return z
+    def project(self, s: torch.Tensor, tar: bool = False) -> torch.Tensor:
+        """Project (maybe latent) state before calculating consistency loss"""
+        s = self._proj_tar(s) if tar else self._proj(s)
+        return s
 
-    def quantize(self, z):
+    def quantize(self, z: torch.Tensor) -> dict[str, torch.Tensor]:
         """Quantize the latent state"""
         return self._fsq(z)
 
@@ -315,34 +345,29 @@ class Encoder(nn.Module):
         tc_loss = torch.zeros(1).to(self.cfg.device)
         reward_loss = torch.zeros(1).to(self.cfg.device)
 
-        a = batch.actions
-
         ##### Create targets #####
+        ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
         with torch.no_grad():
-            next_obs = batch.next_observations
-            zs_tar = self.encode(next_obs, tar=True)["state"]
+            zs_tar = self.encode_obs(batch.next_observations, tar=True)["state"]
+            za = self.encode_action(batch.actions, ids=ids, tar=False)  # NOT a target
 
         ##### Latent rollout #####
-        zs = torch.empty_like(zs_tar)
-        z = self.encode(batch.observations[0])["state"]
+        ids_t = h.get_ids(obs=batch.observations[0], device=self.cfg.device)
+        states_rollout = torch.empty_like(zs_tar)
+        s = self.encode_obs(batch.observations[0])["state"]
         dones = torch.zeros_like(batch.dones[0], dtype=torch.bool)
         terminateds_or_dones = torch.zeros_like(batch.dones, dtype=torch.bool)
-        ids = h.get_ids(obs=batch.observations[0], device=self.cfg.device)
         for t in range(self.cfg.horizon):
             dones = torch.where(terminateds_or_dones[t], dones, batch.dones[t])
             terminateds_or_dones[t] = torch.logical_or(
                 terminateds_or_dones[t], torch.logical_or(dones, batch.terminateds[t])
             )
-
-            # Predict next latent
-            next_z_pred = self.trans(z=z, a=a[t], ids=ids)
+            # Predict next (maybe latent) state
+            next_s_pred = self.trans(s=s, a=za[t], ids=ids_t)
             if self.cfg.use_fsq:
-                next_z_pred = self.quantize(next_z_pred)["state"]
-
-            # Don't forget this
-            z = next_z_pred
-
-            zs[t] = z
+                next_s_pred = self.quantize(next_s_pred)["state"]
+            s = next_s_pred
+            states_rollout[t] = s
 
         rho = torch.tensor([self.cfg.rho**t for t in range(self.cfg.horizon)]).to(
             self.cfg.device
@@ -352,7 +377,7 @@ class Encoder(nn.Module):
         ##### (Optional) Reward prediction loss #####
         if self.cfg.use_rew_loss:
             r_tar = batch.rewards[..., None]  # Reward target
-            r_pred = self.reward(z=zs, a=a)
+            r_pred = self.reward(s=states_rollout, a=za)
             assert r_pred.ndim == 3 and r_tar.ndim == 3
             _reward_loss = (r_pred[..., 0] - r_tar[..., 0]) ** 2
             _rho_reward_loss = rho * torch.mean(
@@ -363,16 +388,16 @@ class Encoder(nn.Module):
         ##### (Optional) Project latent before consistency loss #####
         if self.cfg.use_latent_projection:
             zs_tar = self.project(zs_tar, tar=True)
-            zs = self.project(zs, tar=False)
+            states_rollout = self.project(states_rollout, tar=False)
 
         ##### Temporal consistency loss #####
         if self.cfg.use_tc_loss:
             if self.cfg.use_cosine_similarity_dynamics:
                 """Cosine similarity"""
-                _tc_loss = nn.CosineSimilarity(dim=-1, eps=1e-6)(zs, zs_tar)
+                _tc_loss = nn.CosineSimilarity(dim=-1, eps=1e-6)(states_rollout, zs_tar)
             else:
                 """Mean squared error"""
-                _tc_loss = torch.mean((zs - zs_tar) ** 2, dim=-1)
+                _tc_loss = torch.mean((states_rollout - zs_tar) ** 2, dim=-1)
             _rho_tc_loss = rho * torch.mean((1 - terminateds_or_dones) * _tc_loss, -1)
             tc_loss = torch.mean(_rho_tc_loss)
 
@@ -381,15 +406,15 @@ class Encoder(nn.Module):
             "tc_loss": tc_loss.item(),
             "reward_loss": reward_loss.item(),
             "enc_loss": loss.item(),
-            "z_min": torch.min(zs).item(),
-            "z_max": torch.max(zs).item(),
-            "z_mean": torch.mean(zs.to(torch.float)).item(),
-            "z_median": torch.median(zs).item(),
+            "z_min": torch.min(states_rollout).item(),
+            "z_max": torch.max(states_rollout).item(),
+            "z_mean": torch.mean(states_rollout.to(torch.float)).item(),
+            "z_median": torch.median(states_rollout).item(),
         }
         return loss, info
 
-    def metrics(self, batch):
-        z = self.encode(batch.observations[0])
+    def metrics(self, batch: ReplayBufferSamples) -> dict:
+        z = self.encode_obs(batch.observations[0])
 
         # Calculate rank of latent
         metrics = h.calc_rank(name="z", z=z["state"])
@@ -444,13 +469,12 @@ class iQRL(nn.Module):
         act_specs: list[Bounded],
         ids_to_dims: dict[tuple[int, int], tuple[int, int]],
     ):
-        assert len(obs_specs) == len(act_specs)
         super().__init__()
-
         self.cfg = cfg
         self.ids_to_dims = ids_to_dims
 
         ##### Assert observation types (1d low and high; broadcasted later) #####
+        assert len(obs_specs) == len(act_specs)
         act_spec_lo = act_specs[0].low[0]
         act_spec_hi = act_specs[0].high[0]
         # Make sure that the value ranges for actions are the same across all tasks
@@ -464,6 +488,21 @@ class iQRL(nn.Module):
         if "pixels" in cfg.obs_types or "state" not in cfg.obs_types:
             raise NotImplementedError("Need to use state observations")
 
+        ##### Prepare for FSQ (potentially changes latent dim -> do at beginning) #####
+        if cfg.use_fsq:
+            assert cfg.use_obs_encoder, "Can only use FSQ when using an obs encoder"
+            num_channels = len(cfg.fsq_levels)
+            if not cfg.latent_dim % num_channels == 0:
+                raise NotImplementedError(
+                    "latent_dim must be divisible by number of FSQ channels"
+                )
+            if num_channels > 1:
+                logger.info(
+                    f"Increasing latent dim from {cfg.latent_dim} to "
+                    f"{cfg.latent_dim*num_channels} to account for FSQ channels"
+                )
+                cfg.latent_dim *= num_channels
+
         ##### Calculate max dims of observations, actions and body&task IDs #####
         obs_dim = max(np.prod(obs["state"].shape).item() for obs in obs_specs)
         self.act_dims = [np.prod(act_spec.shape).item() for act_spec in act_specs]
@@ -474,9 +513,20 @@ class iQRL(nn.Module):
             if id_name in obs_specs[0].keys()
         )
 
-        ##### Init encoder #####
+        ##### Calculate dimensions of (optional) latent spaces #####
+        latent_obs_dim = cfg.latent_dim if cfg.use_obs_encoder else obs_dim
+        latent_act_dim = act_dim
+        if cfg.use_action_encoder:
+            latent_act_dim *= cfg.latent_action_dim_factor
+
+        ##### Init encoders, dynamics, and optionally reward and projection models #####
         self.encoder = Encoder(
-            cfg, obs_dim=obs_dim, act_dim=act_dim, ids_dim=ids_dim
+            cfg,
+            obs_dim=obs_dim,
+            act_dim=act_dim,
+            latent_obs_dim=(latent_obs_dim),
+            latent_act_dim=latent_act_dim,
+            ids_dim=ids_dim,
         ).to(cfg.device)
         if cfg.compile:
             self.encoder = torch.compile(self.encoder, mode="default")
@@ -485,7 +535,7 @@ class iQRL(nn.Module):
         ##### Init actor network and its target network #####
         self._pi = Actor(
             cfg,
-            in_dim=self.cfg.latent_dim + (ids_dim if cfg.condition_actor else 0),
+            in_dim=latent_obs_dim + (ids_dim if cfg.condition_actor else 0),
             act_dim=act_dim,
             action_scale=(act_spec_hi - act_spec_lo).to(cfg.device) / 2.0,
             action_bias=(act_spec_hi + act_spec_lo).to(cfg.device) / 2.0,
@@ -497,7 +547,9 @@ class iQRL(nn.Module):
         ##### Init critics and their target networks #####
         Q = Critic(
             cfg,
-            in_dim=cfg.latent_dim + act_dim + (ids_dim if cfg.condition_critic else 0),
+            in_dim=latent_obs_dim
+            + latent_act_dim
+            + (ids_dim if cfg.condition_critic else 0),
         ).to(cfg.device)
         self.Q = torch.compile(Q, mode="default") if cfg.compile else Q
         Q_tar = copy.deepcopy(self.Q).requires_grad_(False)
@@ -534,11 +586,11 @@ class iQRL(nn.Module):
             if i % self.cfg.enc_update_freq == 0:
                 info.update(self.representation_update_step(batch=batch))
 
-            # Map observations to latent
+            # Map observations and actions to latent
             with torch.no_grad():
-                z = self.encoder.encode(batch.observations, tar=False)
-                next_z = self.encoder.encode(batch.next_observations, tar=False)
-            batch = batch._replace(z=z, next_z=next_z)
+                zo = self.encoder.encode_obs(batch.observations, tar=False)
+                next_z = self.encoder.encode_obs(batch.next_observations, tar=False)
+            batch = batch._replace(zo=zo, next_z=next_z)
 
             ##### Make nstep returns #####
             if self.cfg.horizon == 1:
@@ -587,11 +639,11 @@ class iQRL(nn.Module):
             if i % self.cfg.enc_update_freq == 0:
                 info.update(self.representation_update_step(batch=batch, fake=True))
 
-            # Map observations to latent
+            # Map observations and actions to latent
             with torch.no_grad():
-                z = self.encoder.encode(batch.observations, tar=False)
-                next_z = self.encoder.encode(batch.next_observations, tar=False)
-            batch = batch._replace(z=z, next_z=next_z)
+                zo = self.encoder.encode_obs(batch.observations, tar=False)
+                next_z = self.encoder.encode_obs(batch.next_observations, tar=False)
+            batch = batch._replace(zo=zo, next_z=next_z)
 
             ##### Make nstep returns #####
             if self.cfg.horizon == 1:
@@ -611,7 +663,7 @@ class iQRL(nn.Module):
 
     def representation_update_step(
         self, batch: ReplayBufferSamples, fake: bool = False
-    ):
+    ) -> dict:
         self.encoder.train()
         loss, info = self.encoder.loss(batch=batch)
 
@@ -640,7 +692,9 @@ class iQRL(nn.Module):
         self.encoder.eval()
         return info
 
-    def critic_update_step(self, batch: ReplayBufferSamples, fake: bool = False):
+    def critic_update_step(
+        self, batch: ReplayBufferSamples, fake: bool = False
+    ) -> dict:
         self.Q.train()
         self.Q_tar.train()
 
@@ -653,12 +707,13 @@ class iQRL(nn.Module):
         # Make Q target
         ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
         with torch.no_grad():
-            z = batch.z["state"]
-            next_z = batch.next_z["state"]
-            a = batch.actions
-            a_next = self.pi(next_z, ids, tar=True, eval_mode=True, smooth=True)
+            s = batch.z["state"]
+            next_s = batch.next_z["state"]
+            a = self.encoder.encode_action(batch.actions, ids=ids)
+            a_next_raw = self.pi(next_s, ids=ids, tar=True, eval_mode=True, smooth=True)
+            a_next = self.encoder.encode_action(a_next_raw, ids=ids)
 
-            min_q_next_tar = self.Q_tar(z=next_z, a=a_next, ids=ids, return_type="min")
+            min_q_next_tar = self.Q_tar(s=next_s, a=a_next, ids=ids, return_type="min")
             min_q_next_tar = min_q_next_tar[..., 0]
 
             assert min_q_next_tar.shape == batch.rewards.shape
@@ -667,7 +722,7 @@ class iQRL(nn.Module):
                 + (1 - batch.terminateds) * batch.next_state_gammas * min_q_next_tar
             )
 
-        q_values = self.Q(z, a=a, ids=ids, return_type="all")[..., 0]
+        q_values = self.Q(s=s, a=a, ids=ids, return_type="all")[..., 0]
         next_q_value = next_q_value.broadcast_to(q_values.shape)
         q_loss = F.mse_loss(q_values, next_q_value)
 
@@ -700,15 +755,16 @@ class iQRL(nn.Module):
             info.update({f"q{i+1}_values": q_values[i].mean().item()})
         return info
 
-    def pi_update_step(self, batch: ReplayBufferSamples, fake: bool = False):
+    def pi_update_step(self, batch: ReplayBufferSamples, fake: bool = False) -> dict:
         self.pi_update_counter += 1
         self._pi.train()
 
-        z = batch.z["state"]
+        s = batch.z["state"]
         ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
 
-        pi_actions = self._pi(z, ids) * batch.observations["act_mask"]
-        Q_values = self.Q(z=z, a=pi_actions, ids=ids, return_type="avg")
+        pi_actions = self._pi(s=s, ids=ids) * batch.observations["act_mask"]
+        pi_actions = self.encoder.encode_action(pi_actions, ids=ids)
+        Q_values = self.Q(s=s, a=pi_actions, ids=ids, return_type="avg")
 
         if self.cfg.use_offline_data:
             # Add behavior cloning regularization
@@ -736,7 +792,9 @@ class iQRL(nn.Module):
         self.state_norm = state_norm  # (body_id, task_id)->(mean, std)
 
     @torch.no_grad()
-    def select_action(self, obs: TensorDictBase, eval_mode: bool = False):
+    def select_action(
+        self, obs: TensorDictBase, eval_mode: bool = False
+    ) -> torch.Tensor:
         if self.cfg.normalize_states and self.state_norm is not None:
             # Normalize states (no need to pad though; this will be done by the encoder)
             use_nested_tensor = isinstance(obs, LazyStackedTensorDict)
@@ -761,9 +819,9 @@ class iQRL(nn.Module):
             obs = obs.view(1)
             is_flat_obs = True
 
-        z = self.encoder.encode(obs, tar=False).to(torch.float)
+        s = self.encoder.encode_obs(obs, tar=False).to(torch.float)
         ids = h.get_ids(obs=obs, device=self.cfg.device)
-        a = self.pi(z["state"], ids, tar=False, eval_mode=eval_mode)
+        a = self.pi(s["state"], ids, tar=False, eval_mode=eval_mode)
 
         if is_flat_obs:
             body_id = np.argmax(obs["body_id"][0]).item()
@@ -782,13 +840,13 @@ class iQRL(nn.Module):
 
     def pi(
         self,
-        z: torch.Tensor,
+        s: torch.Tensor,
         ids: list[torch.Tensor],
         tar: bool = False,
         eval_mode: bool = False,
         smooth: bool = False,
-    ):
-        a = self._pi_tar(z, ids) if tar else self._pi(z, ids)
+    ) -> torch.Tensor:
+        a = self._pi_tar(s, ids) if tar else self._pi(s, ids)
         if not eval_mode:
             a += torch.normal(0, self._pi.action_scale * self.exploration_noise)
         if smooth:
@@ -800,10 +858,10 @@ class iQRL(nn.Module):
         return a
 
     @property
-    def exploration_noise(self):
+    def exploration_noise(self) -> h.LinearSchedule:
         return self._exploration_noise_schedule()
 
-    def metrics(self, batch):
+    def metrics(self, batch: ReplayBufferSamples) -> dict:
         metrics = self.encoder.metrics(batch)
 
         metrics.update({"enc": h.calc_mean_opt_moments(self.enc_opt)})
@@ -816,5 +874,5 @@ class iQRL(nn.Module):
         return metrics
 
     @property
-    def total_params(self):
+    def total_params(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
