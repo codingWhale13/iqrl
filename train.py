@@ -390,7 +390,7 @@ def train(cfg: TrainConfig):
                 "elapsed_time": time.time() - start_time,
                 "SPS": int(sum(steps) / (time.time() - start_time)),
                 "episode_time": (time.time() - eval_start_time) / cfg.num_eval_episodes,
-                "env_step_total": sum(steps) * cfg.action_repeat,
+                "env_step": sum(steps) * cfg.action_repeat,
                 "step": sum(steps),
                 "episode": episode_idx,
             }
