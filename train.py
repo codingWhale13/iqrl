@@ -46,13 +46,6 @@ class TrainConfig:
     agent: iQRLConfig = field(default_factory=iQRLConfig)
 
     # Experiment: General parameters
-    state_action_mode: str = "padding"  # Specifies how to handle ragged env dims
-    use_obs_encoder: bool = True  # Used in original iQRL, thus defaults to True
-    use_action_encoder: bool = False  # Not in original iQRL, thus defaults to False
-    condition_encoders: bool = True  # Condition encoders on body & task IDs
-    condition_dynamics: bool = True  # Condition transition dynamics on body & task IDs
-    condition_actor: bool = True  # Condition actor on body & task IDs
-    condition_critic: bool = True  # Condition critic on body & task IDs
     max_episode_steps: int = 1000  # Max episode length
     num_episodes: int = 1000  # Number of training episodes per environment
     random_episodes: int = 10  # Number of random episodes at start
@@ -154,11 +147,6 @@ def train(cfg: TrainConfig):
 
     assert cfg.agent.obs_types == ["state"], "only obs_types=['state'] is supported"
     assert not cfg.eval_only or cfg.checkpoint is not None, "eval_only needs checkpoint"
-    if cfg.visualize_latent_states:
-        assert cfg.use_obs_encoder, "Can't visualize latent states without encoder"
-    if cfg.visualize_latent_actions:
-        assert cfg.use_action_encoder, "Can't visualize latent actions without encoder"
-    assert cfg.state_action_mode in ["padding", "multi-head", "attention"]
 
     ###### Fix seed for reproducibility ######
     random.seed(cfg.seed)

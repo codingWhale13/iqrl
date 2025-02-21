@@ -24,17 +24,17 @@ logger = logging.getLogger(__name__)
 class iQRLConfig:
     """Config for iQRL"""
 
-    """How to handle different state and action dims? "padding" or "multi-head" or "attention\""""
-    state_action_mode: str = "${state_action_mode}"  # Set from TrainConfig
+    """Strategy for state and action spaces of differently sized dimensionality"""
+    state_action_mode: str = "padding"
     """Map environment states to latent states before using them in other components"""
-    use_obs_encoder: bool = "${use_obs_encoder}"  # Set from TrainConfig
+    use_obs_encoder: bool = True  # Used in original iQRL, thus defaults to True
     """Map policy actions to latent actions before using them in dynamics and critic"""
-    use_action_encoder: bool = "${use_action_encoder}"  # Set from TrainConfig
+    use_action_encoder: bool = False  # Not in original iQRL, thus defaults to False
     """Condition {encoders, transition dynamics, actor, critic} on body & task IDs"""
-    condition_encoders: bool = "${condition_encoders}"  # Set from TrainConfig
-    condition_dynamics: bool = "${condition_dynamics}"  # Set from TrainConfig
-    condition_actor: bool = "${condition_actor}"  # Set from TrainConfig
-    condition_critic: bool = "${condition_critic}"  # Set from TrainConfig
+    condition_encoders: bool = True
+    condition_dynamics: bool = True
+    condition_actor: bool = True
+    condition_critic: bool = True
     """MLP dims for actor/critic/dynamics"""
     mlp_dims: List[int] = field(default_factory=lambda: [1024, 1024])
     """Learning rate for actor/critic"""
