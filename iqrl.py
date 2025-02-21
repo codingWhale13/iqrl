@@ -710,7 +710,10 @@ class iQRL(nn.Module):
             s = batch.z["state"]
             next_s = batch.next_z["state"]
             a = self.encoder.encode_action(batch.actions, ids=ids)
-            a_next_raw = self.pi(next_s, ids=ids, tar=True, eval_mode=True, smooth=True)
+            a_next_raw = (
+                self.pi(next_s, ids=ids, tar=True, eval_mode=True, smooth=True)
+                * batch.observations["act_mask"]
+            )
             a_next = self.encoder.encode_action(a_next_raw, ids=ids)
 
             min_q_next_tar = self.Q_tar(s=next_s, a=a_next, ids=ids, return_type="min")
