@@ -589,8 +589,7 @@ class iQRL(nn.Module):
             # Map observations and actions to latent
             with torch.no_grad():
                 zo = self.encoder.encode_obs(batch.observations, tar=False)
-                next_z = self.encoder.encode_obs(batch.next_observations, tar=False)
-            batch = batch._replace(zo=zo, next_z=next_z)
+            batch = batch._replace(zo=zo)
 
             ##### Make nstep returns #####
             if self.cfg.horizon == 1:
@@ -642,8 +641,7 @@ class iQRL(nn.Module):
             # Map observations and actions to latent
             with torch.no_grad():
                 zo = self.encoder.encode_obs(batch.observations, tar=False)
-                next_z = self.encoder.encode_obs(batch.next_observations, tar=False)
-            batch = batch._replace(zo=zo, next_z=next_z)
+            batch = batch._replace(zo=zo)
 
             ##### Make nstep returns #####
             if self.cfg.horizon == 1:
@@ -702,13 +700,14 @@ class iQRL(nn.Module):
         assert batch.rewards.ndim == 1
         assert batch.rewards.shape[0] == batch.observations.shape[0]
         assert batch.z is not None
-        assert batch.next_z is not None
 
         # Make Q target
         ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
         with torch.no_grad():
             s = batch.z["state"]
-            next_s = batch.next_z["state"]
+            next_s_raw = batch.next_observations
+            next_s = self.encoder.encode_obs(next_s_raw, tar=False)["state"]
+
             a = self.encoder.encode_action(batch.actions, ids=ids)
             a_next_raw = (
                 self.pi(next_s, ids=ids, tar=True, eval_mode=True, smooth=True)

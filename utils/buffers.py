@@ -21,7 +21,6 @@ class ReplayBufferSamples(NamedTuple):
     rewards: torch.Tensor
     next_state_gammas: torch.Tensor
     z: Optional[TensorDict]
-    next_z: Optional[TensorDict]
 
 
 class ReplayBuffer:
@@ -104,7 +103,6 @@ class ReplayBuffer:
             rewards=batch["next"]["reward"][..., 0],
             next_state_gammas=batch["next_state_gammas"],
             z=None,
-            next_z=None,
         )
         if not return_nstep:
             return batch
@@ -131,11 +129,8 @@ def to_nstep(
     rewards = torch.zeros_like(batch.rewards[0])
     next_state_gammas = torch.ones_like(batch.dones[0], dtype=torch.float32)
     next_obs = torch.zeros_like(batch.observations[0])
-    next_z = torch.zeros_like(batch.next_z[0]) if batch.next_z is not None else None
     for t in range(nstep):
         next_obs = torch.where(dones[..., None], next_obs, batch.next_observations[t])
-        if next_z is not None:
-            next_z = torch.where(dones[..., None], next_z, batch.next_z[t])
         dones = torch.logical_or(dones, batch.dones[t])
         next_state_gammas *= torch.where(dones, 1, gamma)
         terminateds *= torch.where(
@@ -152,7 +147,6 @@ def to_nstep(
         rewards=rewards,
         next_state_gammas=next_state_gammas,
         z=batch.z[0] if batch.z is not None else None,
-        next_z=next_z,
     )
 
     return nstep_batch
