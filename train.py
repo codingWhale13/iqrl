@@ -77,6 +77,7 @@ class TrainConfig:
     log_dormant_neuron_ratio: bool = False
     log_per_task: bool = False  # Log state&act ranges (in any case, log per-task eval)
     visualize_latent_states: bool = True  # Visualize latent state space using t-SNE
+    visualize_latent_actions: bool = False  # Visualize latent action space using t-SNE
 
     # W&B config
     use_wandb: bool = False
@@ -153,6 +154,10 @@ def train(cfg: TrainConfig):
 
     assert cfg.agent.obs_types == ["state"], "only obs_types=['state'] is supported"
     assert not cfg.eval_only or cfg.checkpoint is not None, "eval_only needs checkpoint"
+    if cfg.visualize_latent_states:
+        assert cfg.use_obs_encoder, "Can't visualize latent states without encoder"
+    if cfg.visualize_latent_actions:
+        assert cfg.use_action_encoder, "Can't visualize latent actions without encoder"
     assert cfg.state_action_mode in ["padding", "multi-head", "attention"]
 
     ###### Fix seed for reproducibility ######
@@ -420,37 +425,57 @@ def train(cfg: TrainConfig):
                         )
                         video_env.transform.dump()
 
-            if cfg.visualize_latent_states:
+            if cfg.visualize_latent_states or cfg.visualize_latent_actions:
+
+                def log_tsne(latent_data: np.ndarray, states_or_actions: str):
+                    tsne = TSNE(verbose=1, max_iter=5000)
+                    tsne_results = tsne.fit_transform(latent_data)
+                    env_idx = [env_names[i] for i in range(env_count) for _ in range(n)]
+                    tsne_data = pd.DataFrame(
+                        {
+                            "Env Name": env_idx,
+                            "t-SNE dim 1": tsne_results[:, 0],
+                            "t-SNE dim 2": tsne_results[:, 1],
+                        }
+                    )
+
+                    plt.figure(figsize=(16, 10))
+                    plt.title(f"Latent {states_or_actions} ({episode_idx} episodes)")
+                    tsne_plot = sns.scatterplot(
+                        x="t-SNE dim 1",
+                        y="t-SNE dim 2",
+                        hue="Env Name",
+                        palette=sns.color_palette("husl", env_count),
+                        data=tsne_data,
+                        legend="full",
+                        alpha=0.7,
+                    )
+                    wandb.log(
+                        {
+                            f"tsne_latent_{states_or_actions}": wandb.Image(
+                                tsne_plot.get_figure()
+                            )
+                        }
+                    )
+
                 data = pad_sequence(eval_data, pad_dim=-1)  # Pad latest eval iter
                 n = data.shape[1]  # Samples per env
 
+                # t-SNE expects (n_samples, n_features) -> (env_count*n, latent_dim)
                 with torch.no_grad():
-                    latent_states = agent.encoder.encode_obs(data["observation"])
-                    # t-SNE expects (n_samples, n_features) -> (env_count*n, latent_dim)
-                    latent_states = latent_states["state"].flatten(0, 1).cpu().numpy()
-
-                tsne = TSNE(verbose=1, max_iter=5000)
-                tsne_results = tsne.fit_transform(latent_states)
-                env_idx = [env_names[i] for i in range(env_count) for _ in range(n)]
-                tsne_data = pd.DataFrame(
-                    {
-                        "Env Name": env_idx,
-                        "t-SNE dim 1": tsne_results[:, 0],
-                        "t-SNE dim 2": tsne_results[:, 1],
-                    }
-                )
-
-                plt.figure(figsize=(16, 10))
-                tsne_plot = sns.scatterplot(
-                    x="t-SNE dim 1",
-                    y="t-SNE dim 2",
-                    hue="Env Name",
-                    palette=sns.color_palette("husl", env_count),
-                    data=tsne_data,
-                    legend="full",
-                    alpha=0.7,
-                )
-                wandb.log({"tsne_latent_states": wandb.Image(tsne_plot.get_figure())})
+                    if cfg.visualize_latent_states:
+                        latent_states = agent.encoder.encode_obs(data["observation"])[
+                            "state"
+                        ]
+                        latent_states = latent_states.flatten(0, 1).cpu().numpy()
+                        log_tsne(latent_states, "states")
+                    if cfg.visualize_latent_actions:
+                        ids = h.get_ids(obs=data["observation"], device=cfg.device)
+                        latent_actions = agent.encoder.encode_action(
+                            data["action"].to(cfg.device), ids
+                        )
+                        latent_actions = latent_actions.flatten(0, 1).cpu().numpy()
+                        log_tsne(latent_actions, "actions")
 
         ##### Log rank of latent and active codebook percent #####
         batch = rb.sample(batch_size=agent.encoder.cfg.latent_dim)
