@@ -20,7 +20,7 @@ class ReplayBufferSamples(NamedTuple):
     terminateds: torch.Tensor
     rewards: torch.Tensor
     next_state_gammas: torch.Tensor
-    z: Optional[TensorDict]
+    latent_obs: Optional[TensorDict]
 
 
 class ReplayBuffer:
@@ -102,7 +102,7 @@ class ReplayBuffer:
             terminateds=batch["next"]["terminated"][..., 0].to(torch.int),
             rewards=batch["next"]["reward"][..., 0],
             next_state_gammas=batch["next_state_gammas"],
-            z=None,
+            latent_obs=None,
         )
         if not return_nstep:
             return batch
@@ -146,7 +146,7 @@ def to_nstep(
         terminateds=terminateds.to(torch.int),
         rewards=rewards,
         next_state_gammas=next_state_gammas,
-        z=batch.z[0] if batch.z is not None else None,
+        latent_obs=(batch.latent_obs[0] if batch.latent_obs is not None else None),
     )
 
     return nstep_batch

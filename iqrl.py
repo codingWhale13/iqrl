@@ -348,12 +348,12 @@ class Encoder(nn.Module):
         ##### Create targets #####
         ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
         with torch.no_grad():
-            zs_tar = self.encode_obs(batch.next_observations, tar=True)["state"]
-            za = self.encode_action(batch.actions, ids=ids, tar=False)  # NOT a target
+            states_tar = self.encode_obs(batch.next_observations, tar=True)["state"]
+            actions = self.encode_action(batch.actions, ids=ids, tar=False)  # NO target
 
         ##### Latent rollout #####
         ids_t = h.get_ids(obs=batch.observations[0], device=self.cfg.device)
-        states_rollout = torch.empty_like(zs_tar)
+        states_rollout = torch.empty_like(states_tar)
         s = self.encode_obs(batch.observations[0])["state"]
         dones = torch.zeros_like(batch.dones[0], dtype=torch.bool)
         terminateds_or_dones = torch.zeros_like(batch.dones, dtype=torch.bool)
@@ -363,7 +363,7 @@ class Encoder(nn.Module):
                 terminateds_or_dones[t], torch.logical_or(dones, batch.terminateds[t])
             )
             # Predict next (maybe latent) state
-            next_s_pred = self.trans(s=s, a=za[t], ids=ids_t)
+            next_s_pred = self.trans(s=s, a=actions[t], ids=ids_t)
             if self.cfg.use_fsq:
                 next_s_pred = self.quantize(next_s_pred)["state"]
             s = next_s_pred
@@ -377,7 +377,7 @@ class Encoder(nn.Module):
         ##### (Optional) Reward prediction loss #####
         if self.cfg.use_rew_loss:
             r_tar = batch.rewards[..., None]  # Reward target
-            r_pred = self.reward(s=states_rollout, a=za)
+            r_pred = self.reward(s=states_rollout, a=actions)
             assert r_pred.ndim == 3 and r_tar.ndim == 3
             _reward_loss = (r_pred[..., 0] - r_tar[..., 0]) ** 2
             _rho_reward_loss = rho * torch.mean(
@@ -387,17 +387,19 @@ class Encoder(nn.Module):
 
         ##### (Optional) Project latent before consistency loss #####
         if self.cfg.use_latent_projection:
-            zs_tar = self.project(zs_tar, tar=True)
+            states_tar = self.project(states_tar, tar=True)
             states_rollout = self.project(states_rollout, tar=False)
 
         ##### Temporal consistency loss #####
         if self.cfg.use_tc_loss:
             if self.cfg.use_cosine_similarity_dynamics:
                 """Cosine similarity"""
-                _tc_loss = nn.CosineSimilarity(dim=-1, eps=1e-6)(states_rollout, zs_tar)
+                _tc_loss = nn.CosineSimilarity(dim=-1, eps=1e-6)(
+                    states_rollout, states_tar
+                )
             else:
                 """Mean squared error"""
-                _tc_loss = torch.mean((states_rollout - zs_tar) ** 2, dim=-1)
+                _tc_loss = torch.mean((states_rollout - states_tar) ** 2, dim=-1)
             _rho_tc_loss = rho * torch.mean((1 - terminateds_or_dones) * _tc_loss, -1)
             tc_loss = torch.mean(_rho_tc_loss)
 
@@ -588,8 +590,8 @@ class iQRL(nn.Module):
 
             # Map observations and actions to latent
             with torch.no_grad():
-                zo = self.encoder.encode_obs(batch.observations, tar=False)
-            batch = batch._replace(zo=zo)
+                latent_obs = self.encoder.encode_obs(batch.observations, tar=False)
+            batch = batch._replace(latent_obs=latent_obs)
 
             ##### Make nstep returns #####
             if self.cfg.horizon == 1:
@@ -640,8 +642,8 @@ class iQRL(nn.Module):
 
             # Map observations and actions to latent
             with torch.no_grad():
-                zo = self.encoder.encode_obs(batch.observations, tar=False)
-            batch = batch._replace(zo=zo)
+                latent_obs = self.encoder.encode_obs(batch.observations, tar=False)
+            batch = batch._replace(latent_obs=latent_obs)
 
             ##### Make nstep returns #####
             if self.cfg.horizon == 1:
@@ -699,12 +701,12 @@ class iQRL(nn.Module):
         # Check batch shapes
         assert batch.rewards.ndim == 1
         assert batch.rewards.shape[0] == batch.observations.shape[0]
-        assert batch.z is not None
+        assert batch.latent_obs is not None
 
         # Make Q target
         ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
         with torch.no_grad():
-            s = batch.z["state"]
+            s = batch.latent_obs["state"]
             next_s_raw = batch.next_observations
             next_s = self.encoder.encode_obs(next_s_raw, tar=False)["state"]
 
@@ -761,9 +763,10 @@ class iQRL(nn.Module):
         self.pi_update_counter += 1
         self._pi.train()
 
-        s = batch.z["state"]
-        ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
+        assert batch.latent_obs is not None
+        s = batch.latent_obs["state"]
 
+        ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
         pi_actions = self._pi(s=s, ids=ids) * batch.observations["act_mask"]
         pi_actions = self.encoder.encode_action(pi_actions, ids=ids)
         Q_values = self.Q(s=s, a=pi_actions, ids=ids, return_type="avg")
