@@ -269,39 +269,27 @@ class Encoder(nn.Module):
         if not self.cfg.use_obs_encoder:
             return obs  # Identity mapping
 
-        if "pixels" in self.cfg.obs_types:
-            raise NotImplementedError()
-        zs = {}
-        if self.cfg.state_action_mode == "padding":
-            if isinstance(obs, LazyStackedTensorDict):
-                obs_tensor = obs.get_nestedtensor("state").to_padded_tensor(padding=0.0)
-            else:
-                obs_tensor = obs["state"]
-            p1d = (0, self.obs_dim - obs_tensor.shape[-1])  # No assumptions for obs
-            obs_padded = F.pad(obs_tensor, p1d, "constant", 0.0).to(self.cfg.device)
-            if self.cfg.condition_encoders:
-                ids = h.get_ids(obs=obs, device=self.cfg.device)
-                obs_padded = torch.cat(ids + [obs_padded], dim=-1)
-            if tar:
-                zs["state"] = self._encoder_tar["state"](obs_padded)
-            else:
-                zs["state"] = self._encoder["state"](obs_padded)
-        elif self.cfg.state_action_mode == "multi-head":
-            raise NotImplementedError()
-        elif self.cfg.state_action_mode == "attention":
-            raise NotImplementedError()
-
-        if "state" in self.cfg.obs_types and "pixels" not in self.cfg.obs_types:
-            z = zs["state"]
-            td = TensorDict({"state": z}, batch_size=obs.batch_size)
-        elif "state" not in self.cfg.obs_types and "pixels" in self.cfg.obs_types:
-            z = zs["pixels"]
+        if isinstance(obs, LazyStackedTensorDict):
+            obs_tensor = obs.get_nestedtensor("state").to_padded_tensor(padding=0.0)
         else:
-            raise NotImplementedError("Need to make encoder take both state and pixels")
+            obs_tensor = obs["state"]
+        p1d = (0, self.obs_dim - obs_tensor.shape[-1])  # Don't assume inherent max obs
+        obs_padded = F.pad(obs_tensor, p1d, "constant", 0.0).to(self.cfg.device)
+        if self.cfg.condition_encoders:
+            ids = h.get_ids(obs=obs, device=self.cfg.device)
+            obs_padded = torch.cat(ids + [obs_padded], dim=-1)
 
+        if tar:
+            z = self._encoder_tar["state"](obs_padded)
+        else:
+            z = self._encoder["state"](obs_padded)
         td = TensorDict({"state": z}, batch_size=obs.batch_size)
+
         if self.cfg.use_fsq:
             td.update(self.quantize(z))
+        else:
+            td.update({"codes": z})
+
         return td
 
     def encode_action(
