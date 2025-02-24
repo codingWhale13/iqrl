@@ -25,8 +25,6 @@ logger = logging.getLogger(__name__)
 class iQRLConfig:
     """Config for iQRL"""
 
-    """Strategy for state and action spaces of differently sized dimensionality"""
-    state_action_mode: str = "padding"
     """Map environment states to latent states before using them in other components"""
     use_obs_encoder: bool = True  # Used in original iQRL, thus defaults to True
     """Map policy actions to latent actions before using them in dynamics and critic"""
@@ -70,7 +68,7 @@ class iQRLConfig:
     rho: float = 0.9
     """MLP dims for encoder/decoder"""
     enc_mlp_dims: List[int] = field(default_factory=lambda: [256])
-    """Learning rate for encoder/dynamics/projection/reward"""
+    """Learning rate for encoder/dynamics/reward"""
     enc_lr: float = 1e-4
     """Momentum coefficient for target encoder"""
     enc_tau: float = 0.005
@@ -116,14 +114,6 @@ class iQRLConfig:
     normalize_states: bool = "${normalize_states}"  # Set from TrainConfig
     """When using offline data, this is the only additional parameter (see TD3-BC)"""
     bc_alpha: float = 2.5
-
-    """PROJECTION HEAD"""
-    """Project the latent using an MLP before calculating the temporal consistency loss?"""
-    use_latent_projection: bool = False
-    """MLP dims for projection head"""
-    projection_mlp_dims: List[int] = field(default_factory=lambda: [256])
-    """Dimension of projection - defaults to latent_dim/16"""
-    proj_dim: Optional[int] = None
 
     """EXPLORATION NOISE SCHEDULE"""
     """Initial variance"""
@@ -277,13 +267,6 @@ class Encoder(nn.Module):
         )
 
         ##### Init optional models #####
-        if cfg.use_latent_projection:
-            if cfg.proj_dim is None:
-                cfg.proj_dim = int(latent_obs_dim / 16)
-            self._proj = h.mlp(latent_obs_dim, cfg.mlp_dims, cfg.proj_dim)
-            if cfg.use_tar_enc:
-                self._proj_tar = copy.deepcopy(self._proj).requires_grad_(False)
-
         if cfg.use_rew_loss:
             self._reward = h.mlp(latent_obs_dim + latent_act_dim, cfg.mlp_dims, 1)
             if cfg.r_max is not None and cfg.r_min is not None:
@@ -391,11 +374,6 @@ class Encoder(nn.Module):
                 next_s = einsum(probs, codebook, "b d c, c l -> b d l")
                 next_s = rearrange(next_s, "b d l -> b (d l)")
                 next_s_dict = {"codes": next_s, "logits": logits}
-            elif unc_prop_mode in ["mode", "max"]:
-                # Note this has no gradients so should only be used for MPC
-                indices = torch.max(logits, -1)[1]
-                next_s = self._fsq.implicit_codebook[indices.to(torch.long)].flatten(-2)
-                next_s_dict = {"codes": next_s, "logits": logits, "indices": indices}
             else:
                 raise NotImplementedError
         else:
@@ -424,11 +402,6 @@ class Encoder(nn.Module):
         r = self._reward(sa)
         r = self.r_scale_fn(r)
         return r
-
-    def project(self, s: torch.Tensor, tar: bool = False) -> torch.Tensor:
-        """Project (maybe latent) state before calculating consistency loss"""
-        s = self._proj_tar(s) if tar else self._proj(s)
-        return s
 
     def quantize(self, z: torch.Tensor) -> dict[str, torch.Tensor]:
         """Quantize the latent state"""
@@ -505,11 +478,6 @@ class Encoder(nn.Module):
             _reward_loss = (r_pred - r_tar) ** 2
             _rho_reward_loss = rho * torch.mean((1 - dones) * _reward_loss, -1)
             reward_loss = torch.mean(_rho_reward_loss)
-
-        ##### (Optional) Project latent before consistency loss #####
-        if self.cfg.use_latent_projection:
-            zs_tar["codes"] = self.project(zs_tar["codes"], tar=True)
-            zs["codes"] = self.project(zs["codes"], tar=False)
 
         ##### Temporal consistency loss #####
         if self.cfg.use_tc_loss:
@@ -667,7 +635,7 @@ class iQRL(nn.Module):
         if cfg.use_action_encoder:
             latent_act_dim *= cfg.latent_action_dim_factor
 
-        ##### Init encoders, dynamics, and optionally reward and projection models #####
+        ##### Init encoders, dynamics, and optionally reward model #####
         self.encoder = Encoder(
             cfg,
             obs_dim=obs_dim,
@@ -831,10 +799,6 @@ class iQRL(nn.Module):
             h.soft_update_params(
                 self.encoder._encoder, self.encoder._encoder_tar, tau=self.cfg.enc_tau
             )
-            if self.cfg.use_latent_projection:
-                h.soft_update_params(
-                    self.encoder._proj, self.encoder._proj_tar, tau=self.cfg.enc_tau
-                )
 
         self.encoder.eval()
         return info
