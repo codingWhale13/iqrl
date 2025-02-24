@@ -241,6 +241,9 @@ def train(cfg: TrainConfig):
 
     ###### Prepare replay buffer ######
     nstep = max(cfg.agent.get("nstep", 1), cfg.agent.get("horizon", 1))
+    if cfg.agent.batch_size % env_count != 0:
+        cfg.agent.batch_size -= cfg.agent.batch_size % env_count
+        logger.info(f"Using batch_size={cfg.agent.batch_size} for even sampling")
     rb = ReplayBuffer(
         buffer_size=cfg.buffer_size,
         batch_size=cfg.agent.batch_size,

@@ -12,6 +12,7 @@ import torch.nn.functional as F
 import utils
 import utils.helper as h
 import wandb
+from einops import einsum, rearrange
 from tensordict import LazyStackedTensorDict, TensorDict, TensorDictBase
 from torchrl.data import Bounded, CompositeSpec
 from utils import ReplayBuffer, ReplayBufferSamples
@@ -91,8 +92,20 @@ class iQRLConfig:
     use_tc_loss: bool = True
     """Use reward prediction for representation learning"""
     use_rew_loss: bool = False
-    """Use cosine similarity for consistency loss - otherwise MSE"""
-    use_cosine_similarity_dynamics: bool = True
+    """Reward coefficient"""
+    reward_coef: float = 1.0
+    """Consistency coefficient"""
+    consistency_coef: float = 1.0
+    """If not None then bound the reward output"""
+    r_min: Optional[float] = None
+    """If not None then bound the reward output"""
+    r_max: Optional[float] = None
+    """Which loss function to use for consistency loss?"""
+    consistency_loss: str = "cross-entropy"  # "cross-entropy", "mse", "cosine"
+    """Predict logits with dynamics NN or use cosine/mse between pred and codebook?"""
+    ce_logits_mode: str = "standard"  # "standard", cosine", "mse"
+    """How to get propagate the state dist. during training"""
+    unc_prop_mode: str = "sample"  # Literal["sample", "sample-no-grad", "weighted-avg"]
     """Flag to turn FSQ on/off """
     use_fsq: bool = True
     """FSQ levels - setting as [8,8] corresponds to a codebook of size 8*8=62=2^8"""
@@ -217,12 +230,15 @@ class Encoder(nn.Module):
         latent_obs_dim: int,
         latent_act_dim: int,
         ids_dim: int,
+        org_latent_dim: int,
     ):
         super().__init__()
         self.cfg = cfg
         self.obs_dim = obs_dim
 
         ##### Configure FSQ stuff #####
+        self.org_latent_dim = org_latent_dim
+        self.num_channels = len(cfg.fsq_levels)
         if cfg.use_fsq:
             self._fsq = h.FSQ(levels=cfg.fsq_levels)
 
@@ -245,13 +261,19 @@ class Encoder(nn.Module):
         if cfg.use_tar_enc:
             self._encoder_tar = copy.deepcopy(self._encoder).requires_grad_(False)
 
-        ##### Init dynamics transition model #####
+        ##### Init transition dynamics #####
+        trans_out_dim = self.cfg.latent_dim
+        if self.cfg.consistency_loss == "cross-entropy":
+            if self.cfg.ce_logits_mode == "standard":
+                """If training dynamics w/ cross entropy change output dim"""
+                assert cfg.use_fsq
+                trans_out_dim = int(self.org_latent_dim * self._fsq.codebook_size)
         self._trans = h.mlp(
             in_dim=latent_obs_dim
             + latent_act_dim
             + (ids_dim if cfg.condition_dynamics else 0),
             mlp_dims=cfg.mlp_dims,
-            out_dim=latent_obs_dim,
+            out_dim=trans_out_dim,
         )
 
         ##### Init optional models #####
@@ -264,6 +286,12 @@ class Encoder(nn.Module):
 
         if cfg.use_rew_loss:
             self._reward = h.mlp(latent_obs_dim + latent_act_dim, cfg.mlp_dims, 1)
+            if cfg.r_max is not None and cfg.r_min is not None:
+                r_scale = (cfg.r_max - cfg.r_min) / 2.0
+                r_bias = (cfg.r_max + cfg.r_min) / 2.0
+                self.r_scale_fn = lambda r: torch.tanh(r) * r_scale + r_bias
+            else:
+                self.r_scale_fn = lambda r: r
 
     def encode_obs(self, obs: TensorDictBase, tar: bool = False) -> TensorDictBase:
         if not self.cfg.use_obs_encoder:
@@ -309,15 +337,92 @@ class Encoder(nn.Module):
 
         return za  # NOTE: actions are not being quantized currently
 
-    def trans(self, s: torch.Tensor, a: torch.Tensor, ids: list[torch.Tensor]):
+    def trans(
+        self,
+        s: torch.Tensor,
+        a: torch.Tensor,
+        ids: list[torch.Tensor],
+        unc_prop_mode: Optional[str] = None,
+    ):
         sa = torch.concat(([s, a] + ids if self.cfg.condition_dynamics else [s, a]), -1)
-        delta_s = self._trans(sa)
-        next_s = s + delta_s if self.cfg.use_delta else delta_s
-        return next_s
+
+        if (
+            self.cfg.consistency_loss == "cross-entropy"
+            and self.cfg.ce_logits_mode == "standard"
+        ):
+            """Make predictions with dynamics as NN classifier"""
+            # Returns logits for each class
+            logits = self._trans(sa)
+            logits = logits.reshape(-1, self.org_latent_dim, self._fsq.codebook_size)
+
+            if unc_prop_mode is None:
+                unc_prop_mode = self.cfg.unc_prop_mode
+
+            # Convert latent state logits to an actual latent state
+            if "sample-no-grad" in unc_prop_mode:
+
+                def gumbel_sample(logits):
+                    gumbel_noise = -torch.log(-torch.log(torch.rand_like(logits)))
+                    adjusted_logits = logits + gumbel_noise
+                    return torch.argmax(adjusted_logits, dim=-1)
+
+                indices = gumbel_sample(logits)
+                next_s = self._fsq.implicit_codebook[indices].flatten(-2)
+                next_s_dict = {
+                    "codes": next_s,
+                    "logits": logits,
+                    "indices": indices.to(torch.float),
+                }
+            elif "sample" in unc_prop_mode:
+                s_one_hot = torch.nn.functional.gumbel_softmax(
+                    logits, tau=1, hard=True, dim=-1
+                )
+                codebook = self._fsq.implicit_codebook
+                next_s = einsum(s_one_hot, codebook, "b d c, c l -> b d l")
+                next_s = rearrange(next_s, "b d l -> b (d l)")
+                next_s_dict = {
+                    "codes": next_s,
+                    "logits": logits,
+                    "one-hot": s_one_hot.flatten(-2),
+                }
+            elif "weighted-avg" in unc_prop_mode:
+                probs = F.softmax(logits, dim=-1)
+                codebook = self._fsq.implicit_codebook
+                next_s = einsum(probs, codebook, "b d c, c l -> b d l")
+                next_s = rearrange(next_s, "b d l -> b (d l)")
+                next_s_dict = {"codes": next_s, "logits": logits}
+            elif unc_prop_mode in ["mode", "max"]:
+                # Note this has no gradients so should only be used for MPC
+                indices = torch.max(logits, -1)[1]
+                next_s = self._fsq.implicit_codebook[indices.to(torch.long)].flatten(-2)
+                next_s_dict = {"codes": next_s, "logits": logits, "indices": indices}
+            else:
+                raise NotImplementedError
+        else:
+            """Make predictions with dynamics regression model"""
+            delta_s = self._trans(sa)
+            next_s = s + delta_s if self.cfg.use_delta else delta_s
+            if self.cfg.use_fsq:
+                next_s = self.quantize(next_s)["codes"]
+
+            next_s_dict = {"codes": next_s}
+
+        if self.cfg.use_fsq:
+            shape = *next_s.shape[0:-1], self.org_latent_dim, self.num_channels
+        else:
+            shape = *next_s.shape[0:-1], self.org_latent_dim
+        next_s_dict.update({"z": next_s.reshape(shape)})
+
+        return TensorDict(
+            next_s_dict,
+            batch_size=torch.Size([s.shape[0]]),
+            device=self.cfg.device,
+        )
 
     def reward(self, s: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
         sa = torch.concat([s, a], -1)
         r = self._reward(sa)
+        r = self.r_scale_fn(r)
         return r
 
     def project(self, s: torch.Tensor, tar: bool = False) -> torch.Tensor:
@@ -327,7 +432,9 @@ class Encoder(nn.Module):
 
     def quantize(self, z: torch.Tensor) -> dict[str, torch.Tensor]:
         """Quantize the latent state"""
-        return self._fsq(z)
+        td = self._fsq(z)
+        td["state"] = td["codes"]
+        return td
 
     def loss(self, batch: ReplayBufferSamples) -> Tuple[torch.Tensor, dict]:
         tc_loss = torch.zeros(1).to(self.cfg.device)
@@ -336,71 +443,137 @@ class Encoder(nn.Module):
         ##### Create targets #####
         ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
         with torch.no_grad():
-            states_tar = self.encode_obs(batch.next_observations, tar=True)["state"]
-            actions = self.encode_action(batch.actions, ids=ids, tar=False)  # NO target
+            zs_tar = self.encode_obs(batch.next_observations, tar=True)
+
+        ##### Create TensorDicts to fill #####
+        zs = {
+            "codes": torch.empty(
+                self.cfg.horizon + 1,
+                self.cfg.batch_size,
+                self.cfg.latent_dim,
+                device=self.cfg.device,
+            )
+        }
+        if self.cfg.consistency_loss == "cross-entropy":
+            zs.update(
+                {
+                    "logits": torch.empty(
+                        self.cfg.horizon + 1,
+                        self.cfg.batch_size,
+                        self.org_latent_dim,
+                        self._fsq.codebook_size,
+                        device=self.cfg.device,
+                    )
+                }
+            )
+        zs = TensorDict(
+            zs,
+            batch_size=torch.Size([self.cfg.horizon + 1, self.cfg.batch_size]),
+            device=self.cfg.device,
+        )
 
         ##### Latent rollout #####
-        ids_t = h.get_ids(obs=batch.observations[0], device=self.cfg.device)
-        states_rollout = torch.empty_like(states_tar)
-        s = self.encode_obs(batch.observations[0])["state"]
+        s = self.encode_obs(batch.observations[0])["codes"]
+        actions = self.encode_action(batch.actions, ids=ids, tar=False)
+        zs["codes"][0] = s
         dones = torch.zeros_like(batch.dones[0], dtype=torch.bool)
         terminateds_or_dones = torch.zeros_like(batch.dones, dtype=torch.bool)
+        ids_t = h.get_ids(obs=batch.observations[0], device=self.cfg.device)
         for t in range(self.cfg.horizon):
             dones = torch.where(terminateds_or_dones[t], dones, batch.dones[t])
             terminateds_or_dones[t] = torch.logical_or(
                 terminateds_or_dones[t], torch.logical_or(dones, batch.terminateds[t])
             )
+
             # Predict next (maybe latent) state
-            next_s_pred = self.trans(s=s, a=actions[t], ids=ids_t)
-            if self.cfg.use_fsq:
-                next_s_pred = self.quantize(next_s_pred)["state"]
-            s = next_s_pred
-            states_rollout[t] = s
+            next_s = self.trans(s=s, a=actions[t], ids=ids_t)
+            zs[t + 1] = next_s
+
+            # Don't forget this
+            s = next_s["codes"]
 
         rho = torch.tensor([self.cfg.rho**t for t in range(self.cfg.horizon)]).to(
             self.cfg.device
         )
-        terminateds_or_dones = terminateds_or_dones.to(torch.int)
+        dones = batch.dones.to(torch.int)
 
         ##### (Optional) Reward prediction loss #####
         if self.cfg.use_rew_loss:
-            r_tar = batch.rewards[..., None]  # Reward target
-            r_pred = self.reward(s=states_rollout, a=actions)
-            assert r_pred.ndim == 3 and r_tar.ndim == 3
-            _reward_loss = (r_pred[..., 0] - r_tar[..., 0]) ** 2
-            _rho_reward_loss = rho * torch.mean(
-                (1 - terminateds_or_dones) * _reward_loss, -1
-            )
+            r_tar = batch.rewards  # Reward target
+            r_pred = self.reward(s=zs["codes"][:-1], a=actions)[..., 0]
+            assert r_pred.ndim == 2 and r_tar.ndim == 2
+            _reward_loss = (r_pred - r_tar) ** 2
+            _rho_reward_loss = rho * torch.mean((1 - dones) * _reward_loss, -1)
             reward_loss = torch.mean(_rho_reward_loss)
 
         ##### (Optional) Project latent before consistency loss #####
         if self.cfg.use_latent_projection:
-            states_tar = self.project(states_tar, tar=True)
-            states_rollout = self.project(states_rollout, tar=False)
+            zs_tar["codes"] = self.project(zs_tar["codes"], tar=True)
+            zs["codes"] = self.project(zs["codes"], tar=False)
 
         ##### Temporal consistency loss #####
         if self.cfg.use_tc_loss:
-            if self.cfg.use_cosine_similarity_dynamics:
-                """Cosine similarity"""
-                _tc_loss = nn.CosineSimilarity(dim=-1, eps=1e-6)(
-                    states_rollout, states_tar
+            if self.cfg.consistency_loss == "cross-entropy":
+                """Cross entropy"""
+                if self.cfg.ce_logits_mode in ["cosine", "mse"]:
+                    """If not predicting logits with dynamics NN use alternative method"""
+                    zs_ = zs["codes"][1:].view(
+                        self.cfg.horizon,
+                        self.cfg.batch_size,
+                        int(self.cfg.latent_dim / self.num_channels),
+                        self.num_channels,
+                    )[..., None, :]
+                    codebook = self._fsq.implicit_codebook[None, None, None, ...]
+                    if self.cfg.ce_logits_mode == "cosine":
+                        """Cosine similarity with codebook"""
+                        # TODO use compute_logits like CLIP
+                        zs["logits"][1:] = nn.CosineSimilarity(dim=-1, eps=1e-6)(
+                            zs_, codebook
+                        )
+                    elif self.cfg.ce_logits_mode == "mse":
+                        """Inner product with codebook"""
+                        zs["logits"][1:] = torch.einsum(
+                            "hbdic,hbdCc->hbdC", zs_, codebook
+                        )
+                _tc_loss = torch.vmap(torch.vmap(F.cross_entropy))(
+                    zs["logits"][1:],
+                    zs_tar["indices"].to(torch.long),
                 )
-            else:
+            elif self.cfg.consistency_loss == "cosine":
+                """Cosine similarity"""
+                _tc_loss = -nn.CosineSimilarity(dim=-1, eps=1e-6)(
+                    zs["codes"][1:], zs_tar["codes"]
+                )
+            elif self.cfg.consistency_loss == "mse":
                 """Mean squared error"""
-                _tc_loss = torch.mean((states_rollout - states_tar) ** 2, dim=-1)
-            _rho_tc_loss = rho * torch.mean((1 - terminateds_or_dones) * _tc_loss, -1)
+                _tc_loss = torch.mean((zs["codes"][1:] - zs_tar["codes"]) ** 2, dim=-1)
+            else:
+                raise NotImplementedError(
+                    f"cfg.consistency_loss should be 'cross-entropy', 'mse', 'cosine', not {self.cfg.consistency_loss}"
+                )
+
+            _rho_tc_loss = rho * torch.mean((1 - dones) * _tc_loss, -1)
             tc_loss = torch.mean(_rho_tc_loss)
 
-        loss = tc_loss + reward_loss
+        loss = self.cfg.consistency_coef * tc_loss + self.cfg.reward_coef * reward_loss
         info = {
             "tc_loss": tc_loss.item(),
             "reward_loss": reward_loss.item(),
             "enc_loss": loss.item(),
-            "z_min": torch.min(states_rollout).item(),
-            "z_max": torch.max(states_rollout).item(),
-            "z_mean": torch.mean(states_rollout.to(torch.float)).item(),
-            "z_median": torch.median(states_rollout).item(),
+            "z_min": torch.min(zs["codes"]).item(),
+            "z_max": torch.max(zs["codes"]).item(),
+            "z_mean": torch.mean(zs["codes"].to(torch.float)).item(),
+            "z_median": torch.median(zs["codes"]).item(),
         }
+        if self.cfg.use_rew_loss:
+            info.update(
+                {
+                    "r_min": r_pred.min().item(),
+                    "r_max": r_pred.max().item(),
+                    "r_mean": r_pred.mean().item(),
+                }
+            )
+
         return loss, info
 
     def metrics(self, batch: ReplayBufferSamples) -> dict:
@@ -463,19 +636,20 @@ class iQRL(nn.Module):
             raise NotImplementedError("Need to use state observations")
 
         ##### Prepare for FSQ (potentially changes latent dim -> do at beginning) #####
+        org_latent_dim = copy.copy(cfg.latent_dim)  # Original latent dim
         if cfg.use_fsq:
             assert cfg.use_obs_encoder, "Can only use FSQ when using an obs encoder"
-            num_channels = len(cfg.fsq_levels)
-            if not cfg.latent_dim % num_channels == 0:
+            self.num_channels = len(cfg.fsq_levels)
+            if not cfg.latent_dim % self.num_channels == 0:
                 raise NotImplementedError(
                     "latent_dim must be divisible by number of FSQ channels"
                 )
-            if num_channels > 1:
+            if self.num_channels > 1:
                 logger.info(
                     f"Increasing latent dim from {cfg.latent_dim} to "
-                    f"{cfg.latent_dim*num_channels} to account for FSQ channels"
+                    f"{cfg.latent_dim*self.num_channels} to account for FSQ channels"
                 )
-                cfg.latent_dim *= num_channels
+                cfg.latent_dim *= self.num_channels
 
         ##### Calculate max dims of observations, actions and body&task IDs #####
         obs_dim = max(np.prod(obs["state"].shape).item() for obs in obs_specs)
@@ -498,9 +672,10 @@ class iQRL(nn.Module):
             cfg,
             obs_dim=obs_dim,
             act_dim=act_dim,
-            latent_obs_dim=(latent_obs_dim),
+            latent_obs_dim=latent_obs_dim,
             latent_act_dim=latent_act_dim,
             ids_dim=ids_dim,
+            org_latent_dim=org_latent_dim,
         ).to(cfg.device)
         if cfg.compile:
             self.encoder = torch.compile(self.encoder, mode="default")

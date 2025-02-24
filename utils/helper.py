@@ -64,31 +64,25 @@ def mlp(
     return nn.Sequential(*mlp)
 
 
-class FSQ(nn.Module):
+class FSQ(_FSQ):
     """
     Finite Scalar Quantization
     """
 
     def __init__(self, levels: List[int]):
-        super().__init__()
+        super().__init__(levels=levels)
         self.levels = levels
         self.num_channels = len(levels)
-        self._fsq = _FSQ(levels)
 
     def forward(self, z):
         shp = z.shape
         z = z.view(*shp[:-1], -1, self.num_channels)
         if z.ndim > 3:  # TODO this might not work for CNN
-            codes, indices = torch.func.vmap(self._fsq)(z)
+            codes, indices = torch.func.vmap(super().forward)(z)
         else:
-            codes, indices = self._fsq(z)
-        return {
-            "codes": codes,
-            "codes_flat": codes.flatten(-2),
-            "indices": indices,
-            "z": z,
-            "state": codes.flatten(-2),
-        }
+            codes, indices = super().forward(z)
+        codes = codes.flatten(-2)
+        return {"codes": codes, "indices": indices, "z": z, "state": codes}
 
     def __repr__(self):
         return f"FSQ(levels={self.levels})"
