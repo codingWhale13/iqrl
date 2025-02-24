@@ -34,6 +34,7 @@ class iQRLConfig:
     condition_dynamics: bool = True
     condition_actor: bool = True
     condition_critic: bool = True
+    condition_reward: bool = True
     """MLP dims for actor/critic/dynamics"""
     mlp_dims: List[int] = field(default_factory=lambda: [1024, 1024])
     """Learning rate for actor/critic"""
@@ -266,9 +267,15 @@ class Encoder(nn.Module):
             out_dim=trans_out_dim,
         )
 
-        ##### Init optional models #####
+        ##### Init optional reward model #####
         if cfg.use_rew_loss:
-            self._reward = h.mlp(latent_obs_dim + latent_act_dim, cfg.mlp_dims, 1)
+            self._reward = h.mlp(
+                latent_obs_dim
+                + latent_act_dim
+                + (ids_dim if cfg.condition_reward else 0),
+                cfg.mlp_dims,
+                1,
+            )
             if cfg.r_max is not None and cfg.r_min is not None:
                 r_scale = (cfg.r_max - cfg.r_min) / 2.0
                 r_bias = (cfg.r_max + cfg.r_min) / 2.0
@@ -397,8 +404,10 @@ class Encoder(nn.Module):
             device=self.cfg.device,
         )
 
-    def reward(self, s: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
-        sa = torch.concat([s, a], -1)
+    def reward(
+        self, s: torch.Tensor, a: torch.Tensor, ids: list[torch.Tensor]
+    ) -> torch.Tensor:
+        sa = torch.cat([s, a] + ids if self.cfg.condition_reward else [s, a], -1)
         r = self._reward(sa)
         r = self.r_scale_fn(r)
         return r
@@ -414,7 +423,6 @@ class Encoder(nn.Module):
         reward_loss = torch.zeros(1).to(self.cfg.device)
 
         ##### Create targets #####
-        ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
         with torch.no_grad():
             zs_tar = self.encode_obs(batch.next_observations, tar=True)
 
@@ -447,6 +455,7 @@ class Encoder(nn.Module):
 
         ##### Latent rollout #####
         s = self.encode_obs(batch.observations[0])["codes"]
+        ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
         actions = self.encode_action(batch.actions, ids=ids, tar=False)
         zs["codes"][0] = s
         dones = torch.zeros_like(batch.dones[0], dtype=torch.bool)
@@ -473,7 +482,7 @@ class Encoder(nn.Module):
         ##### (Optional) Reward prediction loss #####
         if self.cfg.use_rew_loss:
             r_tar = batch.rewards  # Reward target
-            r_pred = self.reward(s=zs["codes"][:-1], a=actions)[..., 0]
+            r_pred = self.reward(s=zs["codes"][:-1], a=actions, ids=ids)[..., 0]
             assert r_pred.ndim == 2 and r_tar.ndim == 2
             _reward_loss = (r_pred - r_tar) ** 2
             _rho_reward_loss = rho * torch.mean((1 - dones) * _reward_loss, -1)
