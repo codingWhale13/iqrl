@@ -55,6 +55,8 @@ class iQRLConfig:
     q_sample_size: int = 2
     """Use N-step returns for Q-learning?"""
     nstep: int = 1  # nstep returns
+    """In critic update, next_s can be "encoded" (as in iQRL) or "rollout\""""
+    critic_next_s = "encoded"
     """What observation types to use? ["state"] or ["pixels"] or ["state", "pixels"]"""
     obs_types: List[str] = field(default_factory=lambda: ["state"])
 
@@ -418,7 +420,7 @@ class Encoder(nn.Module):
         td["state"] = td["codes"]
         return td
 
-    def loss(self, batch: ReplayBufferSamples) -> Tuple[torch.Tensor, dict]:
+    def loss(self, batch: ReplayBufferSamples) -> Tuple[torch.Tensor, TensorDict, dict]:
         tc_loss = torch.zeros(1).to(self.cfg.device)
         reward_loss = torch.zeros(1).to(self.cfg.device)
 
@@ -551,7 +553,7 @@ class Encoder(nn.Module):
                 }
             )
 
-        return loss, info
+        return loss, zs, info
 
     def metrics(self, batch: ReplayBufferSamples) -> dict:
         z = self.encode_obs(batch.observations[0])
@@ -710,14 +712,15 @@ class iQRL(nn.Module):
 
             # Update enc less frequently than actor/critic
             if i % self.cfg.enc_update_freq == 0:
-                info.update(self.representation_update_step(batch=batch))
+                zs, repr_info = self.representation_update_step(batch=batch)
+                info.update(repr_info)
 
             # Map observations and actions to latent
             with torch.no_grad():
                 latent_obs = self.encoder.encode_obs(batch.observations, tar=False)
-            batch = batch._replace(latent_obs=latent_obs)
+            batch = batch._replace(z=latent_obs, next_z=zs)
 
-            ##### Make nstep returns #####
+            ##### Make nstep returns: (H+1, B, L) -> (B, L) #####
             if self.cfg.horizon == 1:
                 raise NotImplementedError("Check N-step batch is made correctly if h=1")
             nstep_batch = utils.to_nstep(
@@ -762,12 +765,13 @@ class iQRL(nn.Module):
 
             # Update enc less frequently than actor/critic
             if i % self.cfg.enc_update_freq == 0:
-                info.update(self.representation_update_step(batch=batch, fake=True))
+                zs, repr_info = self.representation_update_step(batch=batch, fake=True)
+                info.update(repr_info)
 
             # Map observations and actions to latent
             with torch.no_grad():
                 latent_obs = self.encoder.encode_obs(batch.observations, tar=False)
-            batch = batch._replace(latent_obs=latent_obs)
+            batch = batch._replace(z=latent_obs, next_z=zs)
 
             ##### Make nstep returns #####
             if self.cfg.horizon == 1:
@@ -787,10 +791,9 @@ class iQRL(nn.Module):
 
     def representation_update_step(
         self, batch: ReplayBufferSamples, fake: bool = False
-    ) -> dict:
+    ) -> Tuple[TensorDict, dict]:
         self.encoder.train()
-        loss, info = self.encoder.loss(batch=batch)
-
+        loss, zs, info = self.encoder.loss(batch=batch)
         self.enc_opt.zero_grad(set_to_none=True)
         loss.backward()
 
@@ -810,7 +813,7 @@ class iQRL(nn.Module):
             )
 
         self.encoder.eval()
-        return info
+        return zs, info
 
     def critic_update_step(
         self, batch: ReplayBufferSamples, fake: bool = False
@@ -821,14 +824,18 @@ class iQRL(nn.Module):
         # Check batch shapes
         assert batch.rewards.ndim == 1
         assert batch.rewards.shape[0] == batch.observations.shape[0]
-        assert batch.latent_obs is not None
+        assert batch.z is not None
 
         # Make Q target
         ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
         with torch.no_grad():
-            s = batch.latent_obs["state"]
-            next_s_raw = batch.next_observations
-            next_s = self.encoder.encode_obs(next_s_raw, tar=False)["state"]
+            s = batch.z["state"]
+
+            if self.cfg.critic_next_s == "encoded":
+                next_s_raw = batch.next_observations
+                next_s = self.encoder.encode_obs(next_s_raw, tar=False)["state"]
+            elif self.cfg.critic_next_s == "rollout":
+                next_s = batch.next_z["codes"]
 
             a = self.encoder.encode_action(batch.actions, ids=ids)
             a_next_raw = (
@@ -883,8 +890,8 @@ class iQRL(nn.Module):
         self.pi_update_counter += 1
         self._pi.train()
 
-        assert batch.latent_obs is not None
-        s = batch.latent_obs["state"]
+        assert batch.z is not None
+        s = batch.z["state"]
 
         ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
         pi_actions = self._pi(s=s, ids=ids) * batch.observations["act_mask"]
