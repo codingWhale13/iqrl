@@ -36,7 +36,7 @@ class iQRLConfig:
     condition_critic: bool = True
     condition_reward: bool = True
     """MLP dims for actor/critic/dynamics"""
-    mlp_dims: List[int] = field(default_factory=lambda: [1024, 1024])
+    mlp_dims: List[int] = field(default_factory=lambda: [512, 512])
     """Learning rate for actor/critic"""
     lr: float = 3e-4
     """Batch size - same for for representation learning and actor/critic"""
@@ -102,10 +102,10 @@ class iQRLConfig:
     """If not None then bound the reward output"""
     r_max: Optional[float] = None
     """Which loss function to use for consistency loss?"""
-    consistency_loss: str = "cross-entropy"  # "cross-entropy", "mse", "cosine"
-    """Predict logits with dynamics NN or use cosine/mse between pred and codebook?"""
+    consistency_loss: str = "cosine"  # "cross-entropy", "mse", "cosine"
+    """Predict logits with dynamics NN or use cosine/mse between pred and codebook?  (only for cross-entropy)"""
     ce_logits_mode: str = "standard"  # "standard", cosine", "mse"
-    """How to get propagate the state dist. during training"""
+    """How to get propagate the state dist. during training (only for cross-entropy)"""
     unc_prop_mode: str = "sample"  # Literal["sample", "sample-no-grad", "weighted-avg"]
     """Flag to turn FSQ on/off """
     use_fsq: bool = True
