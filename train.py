@@ -50,7 +50,7 @@ class TrainConfig:
     num_episodes: int = 3000  # Number of training episodes per environment
     random_episodes: int = 10  # Number of random episodes at start
     action_repeat: int = 2
-    buffer_size: int = 10_000_000
+    buffer_size: int = 2_000_000  # Replay buffer size, per task
     prefetch: int = 5
     seed: int = 42
     checkpoint: Optional[str] = None  # /file/path/to/checkpoint
