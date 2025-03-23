@@ -1,0 +1,13 @@
+# @package _global_
+defaults:
+  - hard
+  - _self_
+
+envs:
+  - ["dog", "stand"]
+  - ["dog", "walk"]
+  - ["dog", "trot"]
+  - ["dog", "run"]
+  - ["walker", "stand"]
+  - ["walker", "walk"]
+  - ["walker", "run"]
