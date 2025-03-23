@@ -67,7 +67,6 @@ class TrainConfig:
     eval_every_episodes: int = 20
     num_eval_episodes: int = 10
     capture_eval_video: bool = False  # Fails on AMD GPU so set to False
-    log_dormant_neuron_ratio: bool = False
     log_per_task: bool = False  # Log state&act ranges (in any case, log per-task eval)
     visualize_latent_states: bool = True  # Visualize latent state space using t-SNE
     visualize_latent_actions: bool = False  # Visualize latent action space using t-SNE

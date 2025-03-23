@@ -622,9 +622,6 @@ class Encoder(nn.Module):
                 }
             )
 
-        # TODO add dormant neuron ratio stuff
-        # metrics.update(h.calc_dormant_neuron_ratio(batch, agent=self))
-
         return metrics
 
 
@@ -1044,9 +1041,6 @@ class iQRL(nn.Module):
         metrics.update({"enc": h.calc_mean_opt_moments(self.enc_opt)})
         metrics.update({"Q": h.calc_mean_opt_moments(self.q_opt)})
         metrics.update({"pi": h.calc_mean_opt_moments(self.pi_opt)})
-
-        # TODO add dormant neuron ratio stuff
-        # metrics.update(h.calc_dormant_neuron_ratio(batch, agent=self))
 
         return metrics
 
