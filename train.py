@@ -197,7 +197,7 @@ def train(cfg: TrainConfig):
             task_name=task_name,
             body_id=torch.tensor([body_str_to_id[body_name]], device=cfg.device),
             task_id=torch.tensor([task_str_to_id[task_name]], device=cfg.device),
-            record_video=False,  # No need, video_envs below will record
+            record_video=False,  # No need, video_envs will record videos
             **common_kwargs_for_make_env,
         )
         for body_name, task_name in cfg.envs
@@ -231,18 +231,23 @@ def train(cfg: TrainConfig):
         env_count,
         [partial(fn, use_offline_data=False) for fn in create_fn],
     )
-    video_envs = [
-        make_env(
-            env_name=body_name,
-            task_name=task_name,
-            body_id=body_str_to_id[body_name],
-            task_id=task_str_to_id[task_name],
-            record_video=cfg.capture_eval_video,
-            use_offline_data=False,
-            **common_kwargs_for_make_env,
-        )
-        for body_name, task_name in cfg.envs
-    ]
+    if cfg.capture_eval_video:
+        video_envs = [
+            make_env(
+                env_name=body_name,
+                task_name=task_name,
+                body_id=torch.tensor([body_str_to_id[body_name]], device=cfg.device),
+                task_id=torch.tensor([task_str_to_id[task_name]], device=cfg.device),
+                record_video=cfg.capture_eval_video,
+                use_offline_data=False,
+                obs_dim=od[i],
+                act_dim=ad[i],
+                max_obs_dim=max(od),
+                max_act_dim=max(ad),
+                **common_kwargs_for_make_env,
+            )
+            for i, (body_name, task_name) in enumerate(cfg.envs)
+        ]
 
     ###### Prepare replay buffer ######
     nstep = max(cfg.agent.get("nstep", 1), cfg.agent.get("horizon", 1))
