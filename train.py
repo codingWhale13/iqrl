@@ -175,8 +175,12 @@ def train(cfg: TrainConfig):
     )
 
     ###### Setup environment for training/evaluation/video recording ######
-    body_str_to_id = h.seq_to_1hot([body_name for body_name, _ in cfg.envs])
-    task_str_to_id = h.seq_to_1hot([task_name for _, task_name in cfg.envs])
+    body_names = [body_name for body_name, _ in cfg.envs]
+    task_names = [task_name for _, task_name in cfg.envs]
+    body_str_to_id = h.seq_to_id(body_names)
+    task_str_to_id = h.seq_to_id(task_names)
+    n_body = len(set(body_names))
+    n_task = len(set(task_names))
 
     common_kwargs_for_make_env = {
         "seed": cfg.seed,
@@ -184,14 +188,16 @@ def train(cfg: TrainConfig):
         "from_pixels": False,
         "pixels_only": False,
         "logger": writer,
+        "n_body": n_body,
+        "n_task": n_task,
     }
     create_fn = [
         partial(
             make_env,
             env_name=body_name,
             task_name=task_name,
-            body_id=body_str_to_id[body_name],
-            task_id=task_str_to_id[task_name],
+            body_id=torch.tensor([body_str_to_id[body_name]], device=cfg.device),
+            task_id=torch.tensor([task_str_to_id[task_name]], device=cfg.device),
             record_video=False,  # No need, video_envs below will record
             **common_kwargs_for_make_env,
         )
@@ -264,7 +270,12 @@ def train(cfg: TrainConfig):
         a = np.array(act_specs[i].shape).prod().item()
         ids_to_dims[(body_id, task_id)] = (o, a)
     agent = iQRL(
-        cfg=cfg.agent, obs_specs=obs_specs, act_specs=act_specs, ids_to_dims=ids_to_dims
+        cfg=cfg.agent,
+        obs_specs=obs_specs,
+        act_specs=act_specs,
+        n_body=n_body,
+        n_task=n_task,
+        ids_to_dims=ids_to_dims,
     )
     # Load state dict into this agent from filepath (or dictionary)
     if cfg.checkpoint is not None:
@@ -461,9 +472,9 @@ def train(cfg: TrainConfig):
                         latent_states = latent_states.flatten(0, 1).cpu().numpy()
                         log_tsne(latent_states, "states")
                     if cfg.visualize_latent_actions:
-                        ids = h.get_ids(obs=data["observation"], device=cfg.device)
                         latent_actions = agent.encoder.encode_action(
-                            data["action"].to(cfg.device), ids
+                            action=data["action"].to(cfg.device),
+                            ctx=agent.encoder.get_context(data["observation"]),
                         )
                         latent_actions = latent_actions.flatten(0, 1).cpu().numpy()
                         log_tsne(latent_actions, "actions")

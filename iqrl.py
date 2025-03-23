@@ -57,6 +57,8 @@ class iQRLConfig:
     nstep: int = 1  # nstep returns
     """In critic update, next_s can be "encoded" (as in iQRL) or "rollout\""""
     critic_next_s = "encoded"
+    """Body and task embedding size; use None for one-hot encoding instead"""
+    context_dim: Optional[int] = None  # Sensible default for embedding size: 96
     """What observation types to use? ["state"] or ["pixels"] or ["state", "pixels"]"""
     obs_types: List[str] = field(default_factory=lambda: ["state"])
 
@@ -160,8 +162,8 @@ class Actor(nn.Module):
         self.action_bias = action_bias
         self.mlp = h.mlp(in_dim, self.cfg.mlp_dims, act_dim)
 
-    def forward(self, s: torch.Tensor, ids: list[torch.Tensor]):
-        x = torch.cat([s] + ids, -1) if self.cfg.condition_actor else s
+    def forward(self, s: torch.Tensor, ctx: list[torch.Tensor]):
+        x = torch.cat(ctx + [s], -1) if self.cfg.condition_actor else s
         a = self.mlp(x)
         a = torch.tanh(a)
         a = a * self.action_scale + self.action_bias
@@ -191,10 +193,10 @@ class Critic(nn.Module):
         self,
         s: torch.Tensor,
         a: torch.Tensor,
-        ids: list[torch.Tensor],
+        ctx: list[torch.Tensor],
         return_type: str = "all",
     ):
-        x = torch.cat([s, a] + ids if self.cfg.condition_critic else [s, a], -1)
+        x = torch.cat(ctx + [s, a] if self.cfg.condition_critic else [s, a], -1)
         qs = self.qs(x)
         if return_type == "all":
             return qs
@@ -222,12 +224,25 @@ class Encoder(nn.Module):
         act_dim: int,
         latent_obs_dim: int,
         latent_act_dim: int,
-        ids_dim: int,
+        ctx_dim: int,
         org_latent_dim: int,
+        n_body: int,
+        n_task: int,
     ):
         super().__init__()
         self.cfg = cfg
         self.obs_dim = obs_dim
+
+        ##### Prepare for adding body and task context (either 1-hot or embedded) #####
+        self.n_body = n_body
+        self.n_task = n_task
+        if cfg.context_dim is not None:
+            self._body_emb = nn.Embedding(
+                self.n_body, cfg.context_dim, max_norm=1, device=self.cfg.device
+            )
+            self._task_emb = nn.Embedding(
+                self.n_task, cfg.context_dim, max_norm=1, device=self.cfg.device
+            )
 
         ##### Configure FSQ stuff #####
         self.org_latent_dim = org_latent_dim
@@ -239,14 +254,14 @@ class Encoder(nn.Module):
         self._encoder = nn.ModuleDict()
         if "state" in cfg.obs_types and cfg.use_obs_encoder:
             self._encoder["state"] = h.mlp(
-                in_dim=obs_dim + (ids_dim if cfg.condition_encoders else 0),
+                in_dim=obs_dim + (ctx_dim if cfg.condition_encoders else 0),
                 mlp_dims=cfg.enc_mlp_dims,
                 out_dim=latent_obs_dim,
                 dropout=cfg.enc_dropout,
             )
         if cfg.use_action_encoder:
             self._encoder["action"] = h.mlp(
-                in_dim=act_dim + (ids_dim if cfg.condition_encoders else 0),
+                in_dim=act_dim + (ctx_dim if cfg.condition_encoders else 0),
                 mlp_dims=cfg.enc_mlp_dims,
                 out_dim=latent_act_dim,
                 dropout=cfg.enc_dropout,
@@ -264,7 +279,7 @@ class Encoder(nn.Module):
         self._trans = h.mlp(
             in_dim=latent_obs_dim
             + latent_act_dim
-            + (ids_dim if cfg.condition_dynamics else 0),
+            + (ctx_dim if cfg.condition_dynamics else 0),
             mlp_dims=cfg.mlp_dims,
             out_dim=trans_out_dim,
         )
@@ -274,7 +289,7 @@ class Encoder(nn.Module):
             self._reward = h.mlp(
                 latent_obs_dim
                 + latent_act_dim
-                + (ids_dim if cfg.condition_reward else 0),
+                + (ctx_dim if cfg.condition_reward else 0),
                 cfg.mlp_dims,
                 1,
             )
@@ -284,6 +299,32 @@ class Encoder(nn.Module):
                 self.r_scale_fn = lambda r: torch.tanh(r) * r_scale + r_bias
             else:
                 self.r_scale_fn = lambda r: r
+
+    def get_context(self, obs: TensorDictBase) -> list[torch.Tensor]:
+        """
+        Returns body and task representation, if available.
+        The representations will be one-hot if context_dim is None, embeddings otherwise.
+        """
+
+        context = []
+        body_id = obs.get("body_id").long().squeeze(-1).to(self.cfg.device)
+        task_id = obs.get("task_id").long().squeeze(-1).to(self.cfg.device)
+        if self.cfg.context_dim is None:
+            # Use one-hot encoding
+            if body_id is not None:
+                body = nn.functional.one_hot(body_id, self.n_body).to(self.cfg.device)
+                context.append(body)
+            if task_id is not None:
+                task = nn.functional.one_hot(task_id, self.n_task).to(self.cfg.device)
+                context.append(task)
+        else:
+            # Use embedding
+            if body_id is not None:
+                context.append(self._body_emb(body_id).to(self.cfg.device))
+            if task_id is not None:
+                context.append(self._task_emb(task_id).to(self.cfg.device))
+
+        return context
 
     def encode_obs(self, obs: TensorDictBase, tar: bool = False) -> TensorDictBase:
         if not self.cfg.use_obs_encoder:
@@ -295,9 +336,9 @@ class Encoder(nn.Module):
             obs_tensor = obs["state"]
         p1d = (0, self.obs_dim - obs_tensor.shape[-1])  # Don't assume inherent max obs
         obs_padded = F.pad(obs_tensor, p1d, "constant", 0.0).to(self.cfg.device)
+
         if self.cfg.condition_encoders:
-            ids = h.get_ids(obs=obs, device=self.cfg.device)
-            obs_padded = torch.cat(ids + [obs_padded], dim=-1)
+            obs_padded = torch.cat(self.get_context(obs) + [obs_padded], dim=-1)
 
         if tar:
             z = self._encoder_tar["state"](obs_padded)
@@ -313,14 +354,14 @@ class Encoder(nn.Module):
         return td
 
     def encode_action(
-        self, action: torch.Tensor, ids: list[torch.Tensor], tar: bool = False
+        self, action: torch.Tensor, ctx: list[torch.Tensor], tar: bool = False
     ) -> torch.Tensor:
         if not self.cfg.use_action_encoder:
             return action  # Identity mapping
 
         # NOTE: No padding required because action comes from padded replay buffer
         if self.cfg.condition_encoders:
-            action = torch.cat(ids + [action], dim=-1)
+            action = torch.cat(ctx + [action], dim=-1)
 
         if tar:
             za = self._encoder_tar["action"](action)
@@ -333,10 +374,10 @@ class Encoder(nn.Module):
         self,
         s: torch.Tensor,
         a: torch.Tensor,
-        ids: list[torch.Tensor],
+        ctx: list[torch.Tensor],
         unc_prop_mode: Optional[str] = None,
     ):
-        sa = torch.concat(([s, a] + ids if self.cfg.condition_dynamics else [s, a]), -1)
+        sa = torch.concat((ctx + [s, a] if self.cfg.condition_dynamics else [s, a]), -1)
 
         if (
             self.cfg.consistency_loss == "cross-entropy"
@@ -407,9 +448,9 @@ class Encoder(nn.Module):
         )
 
     def reward(
-        self, s: torch.Tensor, a: torch.Tensor, ids: list[torch.Tensor]
+        self, s: torch.Tensor, a: torch.Tensor, ctx: list[torch.Tensor]
     ) -> torch.Tensor:
-        sa = torch.cat([s, a] + ids if self.cfg.condition_reward else [s, a], -1)
+        sa = torch.cat(ctx + [s, a] if self.cfg.condition_reward else [s, a], -1)
         r = self._reward(sa)
         r = self.r_scale_fn(r)
         return r
@@ -457,12 +498,12 @@ class Encoder(nn.Module):
 
         ##### Latent rollout #####
         s = self.encode_obs(batch.observations[0])["codes"]
-        ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
-        actions = self.encode_action(batch.actions, ids=ids, tar=False)
+        ctx = self.get_context(batch.observations)
+        actions = self.encode_action(batch.actions, ctx=ctx, tar=False)
         zs["codes"][0] = s
         dones = torch.zeros_like(batch.dones[0], dtype=torch.bool)
         terminateds_or_dones = torch.zeros_like(batch.dones, dtype=torch.bool)
-        ids_t = h.get_ids(obs=batch.observations[0], device=self.cfg.device)
+        ctx_t = self.get_context(batch.observations[0])
         for t in range(self.cfg.horizon):
             dones = torch.where(terminateds_or_dones[t], dones, batch.dones[t])
             terminateds_or_dones[t] = torch.logical_or(
@@ -470,7 +511,7 @@ class Encoder(nn.Module):
             )
 
             # Predict next (maybe latent) state
-            next_s = self.trans(s=s, a=actions[t], ids=ids_t)
+            next_s = self.trans(s=s, a=actions[t], ctx=ctx_t)
             zs[t + 1] = next_s
 
             # Don't forget this
@@ -484,7 +525,7 @@ class Encoder(nn.Module):
         ##### (Optional) Reward prediction loss #####
         if self.cfg.use_rew_loss:
             r_tar = batch.rewards  # Reward target
-            r_pred = self.reward(s=zs["codes"][:-1], a=actions, ids=ids)[..., 0]
+            r_pred = self.reward(s=zs["codes"][:-1], a=actions, ctx=ctx)[..., 0]
             assert r_pred.ndim == 2 and r_tar.ndim == 2
             _reward_loss = (r_pred - r_tar) ** 2
             _rho_reward_loss = rho * torch.mean((1 - dones) * _reward_loss, -1)
@@ -593,6 +634,8 @@ class iQRL(nn.Module):
         cfg: iQRLConfig,
         obs_specs: list[CompositeSpec],
         act_specs: list[Bounded],
+        n_body: int,
+        n_task: int,
         ids_to_dims: dict[tuple[int, int], tuple[int, int]],
     ):
         super().__init__()
@@ -634,11 +677,11 @@ class iQRL(nn.Module):
         obs_dim = max(np.prod(obs["state"].shape).item() for obs in obs_specs)
         self.act_dims = [np.prod(act_spec.shape).item() for act_spec in act_specs]
         act_dim = max(self.act_dims)
-        ids_dim = sum(
-            np.array(obs_specs[0][id_name].shape).prod().item()
-            for id_name in ["body_id", "task_id"]
-            if id_name in obs_specs[0].keys()
-        )
+        keys = [c for c in ["body_id", "task_id"] if c in obs_specs[0].keys()]
+        if cfg.context_dim is None:  # IDs will be one-hot encoded
+            ctx_dim = n_body * ("body_id" in keys) + n_task * ("task_id" in keys)
+        else:  # IDs will be embedded
+            ctx_dim = cfg.context_dim * len(keys)
 
         ##### Calculate dimensions of (optional) latent spaces #####
         latent_obs_dim = cfg.latent_dim if cfg.use_obs_encoder else obs_dim
@@ -653,8 +696,10 @@ class iQRL(nn.Module):
             act_dim=act_dim,
             latent_obs_dim=latent_obs_dim,
             latent_act_dim=latent_act_dim,
-            ids_dim=ids_dim,
+            ctx_dim=ctx_dim,
             org_latent_dim=org_latent_dim,
+            n_body=n_body,
+            n_task=n_task,
         ).to(cfg.device)
         if cfg.compile:
             self.encoder = torch.compile(self.encoder, mode="default")
@@ -663,7 +708,7 @@ class iQRL(nn.Module):
         ##### Init actor network and its target network #####
         self._pi = Actor(
             cfg,
-            in_dim=latent_obs_dim + (ids_dim if cfg.condition_actor else 0),
+            in_dim=latent_obs_dim + (ctx_dim if cfg.condition_actor else 0),
             act_dim=act_dim,
             action_scale=(act_spec_hi - act_spec_lo).to(cfg.device) / 2.0,
             action_bias=(act_spec_hi + act_spec_lo).to(cfg.device) / 2.0,
@@ -677,7 +722,7 @@ class iQRL(nn.Module):
             cfg,
             in_dim=latent_obs_dim
             + latent_act_dim
-            + (ids_dim if cfg.condition_critic else 0),
+            + (ctx_dim if cfg.condition_critic else 0),
         ).to(cfg.device)
         self.Q = torch.compile(Q, mode="default") if cfg.compile else Q
         Q_tar = copy.deepcopy(self.Q).requires_grad_(False)
@@ -827,7 +872,7 @@ class iQRL(nn.Module):
         assert batch.z is not None
 
         # Make Q target
-        ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
+        ctx = self.encoder.get_context(batch.observations)
         with torch.no_grad():
             s = batch.z["state"]
 
@@ -837,14 +882,14 @@ class iQRL(nn.Module):
             elif self.cfg.critic_next_s == "rollout":
                 next_s = batch.next_z["codes"]
 
-            a = self.encoder.encode_action(batch.actions, ids=ids)
+            a = self.encoder.encode_action(batch.actions, ctx=ctx)
             a_next_raw = (
-                self.pi(next_s, ids=ids, tar=True, eval_mode=True, smooth=True)
+                self.pi(next_s, ctx=ctx, tar=True, eval_mode=True, smooth=True)
                 * batch.observations["act_mask"]
             )
-            a_next = self.encoder.encode_action(a_next_raw, ids=ids)
+            a_next = self.encoder.encode_action(a_next_raw, ctx=ctx)
 
-            min_q_next_tar = self.Q_tar(s=next_s, a=a_next, ids=ids, return_type="min")
+            min_q_next_tar = self.Q_tar(s=next_s, a=a_next, ctx=ctx, return_type="min")
             min_q_next_tar = min_q_next_tar[..., 0]
 
             assert min_q_next_tar.shape == batch.rewards.shape
@@ -853,7 +898,7 @@ class iQRL(nn.Module):
                 + (1 - batch.terminateds) * batch.next_state_gammas * min_q_next_tar
             )
 
-        q_values = self.Q(s=s, a=a, ids=ids, return_type="all")[..., 0]
+        q_values = self.Q(s=s, a=a, ctx=ctx, return_type="all")[..., 0]
         next_q_value = next_q_value.broadcast_to(q_values.shape)
         q_loss = F.mse_loss(q_values, next_q_value)
 
@@ -893,10 +938,10 @@ class iQRL(nn.Module):
         assert batch.z is not None
         s = batch.z["state"]
 
-        ids = h.get_ids(obs=batch.observations, device=self.cfg.device)
-        pi_actions = self._pi(s=s, ids=ids) * batch.observations["act_mask"]
-        pi_actions = self.encoder.encode_action(pi_actions, ids=ids)
-        Q_values = self.Q(s=s, a=pi_actions, ids=ids, return_type="avg")
+        ctx = self.encoder.get_context(batch.observations)
+        pi_actions = self._pi(s=s, ctx=ctx) * batch.observations["act_mask"]
+        pi_actions = self.encoder.encode_action(pi_actions, ctx=ctx)
+        Q_values = self.Q(s=s, a=pi_actions, ctx=ctx, return_type="avg")
 
         if self.cfg.use_offline_data:
             # Add behavior cloning regularization
@@ -952,12 +997,12 @@ class iQRL(nn.Module):
             is_flat_obs = True
 
         s = self.encoder.encode_obs(obs, tar=False).to(torch.float)
-        ids = h.get_ids(obs=obs, device=self.cfg.device)
-        a = self.pi(s["state"], ids, tar=False, eval_mode=eval_mode)
+        ctx = self.encoder.get_context(obs)
+        a = self.pi(s["state"], ctx, tar=False, eval_mode=eval_mode)
 
         if is_flat_obs:
-            body_id = np.argmax(obs["body_id"][0]).item()
-            task_id = np.argmax(obs["task_id"][0]).item()
+            body_id = obs["body_id"][0].item()
+            task_id = obs["task_id"][0].item()
             act_dim = self.ids_to_dims[(body_id, task_id)][1]
             return a[0][:act_dim]
         else:
@@ -973,12 +1018,12 @@ class iQRL(nn.Module):
     def pi(
         self,
         s: torch.Tensor,
-        ids: list[torch.Tensor],
+        ctx: list[torch.Tensor],
         tar: bool = False,
         eval_mode: bool = False,
         smooth: bool = False,
     ) -> torch.Tensor:
-        a = self._pi_tar(s, ids) if tar else self._pi(s, ids)
+        a = self._pi_tar(s, ctx) if tar else self._pi(s, ctx)
         if not eval_mode:
             a += torch.normal(0, self._pi.action_scale * self.exploration_noise)
         if smooth:

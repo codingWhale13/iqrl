@@ -319,21 +319,13 @@ def calc_mean_opt_moments(opt):
     return {"first_moment_mean": first_moment, "second_moment_mean": second_moment}
 
 
-def seq_to_1hot(keys: Sequence[str]):
-    """Returns mapping from string identifiers to one-hot encoded tensors.
-    The order of the input sequence determines the ordering of the encodings."""
-
-    n = len(set(keys))
+def seq_to_id(keys: Sequence[str]) -> dict[str, int]:
+    """Returns mapping from string identifiers to unique IDs.
+    The order of the input sequence determines the ordering of the IDs."""
     str_to_id = {}
     next_id = 0
     for key in keys:
         if key not in str_to_id.keys():
-            str_to_id[key] = nn.functional.one_hot(torch.tensor(next_id), n)
+            str_to_id[key] = next_id
             next_id += 1
     return str_to_id
-
-
-def get_ids(obs: TensorDictBase, device: str) -> list[torch.Tensor]:
-    return [
-        x.to(device) for x in (obs.get("body_id"), obs.get("task_id")) if x is not None
-    ]
