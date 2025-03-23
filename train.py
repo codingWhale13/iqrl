@@ -407,7 +407,7 @@ def train(cfg: TrainConfig):
 
         if cfg.verbose:
             logger.info(
-                f"Episode {episode_idx} | Env Step {step*cfg.action_repeat} | "
+                f"Episode {episode_idx} | Env Step {sum(steps)*cfg.action_repeat} | "
                 f"Eval return (mean over envs) {eval_episodic_return_mean:.2f}"
             )
 

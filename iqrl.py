@@ -56,7 +56,7 @@ class iQRLConfig:
     """Use N-step returns for Q-learning?"""
     nstep: int = 1  # nstep returns
     """In critic update, next_s can be "encoded" (as in iQRL) or "rollout\""""
-    critic_next_s = "encoded"
+    critic_next_s: str = "encoded"
     """Body and task embedding size; use None for one-hot encoding instead"""
     context_dim: Optional[int] = None  # Sensible default for embedding size: 96
     """What observation types to use? ["state"] or ["pixels"] or ["state", "pixels"]"""
