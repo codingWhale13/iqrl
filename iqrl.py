@@ -742,19 +742,25 @@ class iQRL(nn.Module):
 
         self.state_norm = None  # If cfg.normalize_states==True, will be set later
 
-    def update(self, replay_buffer: ReplayBuffer, num_new_transitions: int) -> dict:
-        """Update representation and TD3 at same time"""
+    def update(
+        self,
+        replay_buffer: ReplayBuffer,
+        num_new_transitions: int,
+        fake: bool = False,
+        rb_idx: Optional[int] = None,
+    ) -> dict:
+        """Update representation and RL at same time (if fake=True, only return info)"""
         num_updates = int(num_new_transitions * self.cfg.utd_ratio)
         info = {}
 
-        if self.cfg.verbose:
+        if self.cfg.verbose and not fake:
             logger.info(f"Performing {num_updates} iQRL updates...")
         for i in range(num_updates):
-            batch = replay_buffer.sample()
+            batch = replay_buffer.sample(rb_idx=rb_idx)
 
             # Update enc less frequently than actor/critic
             if i % self.cfg.enc_update_freq == 0:
-                zs, repr_info = self.representation_update_step(batch=batch)
+                zs, repr_info = self.representation_update_step(batch=batch, fake=fake)
                 info.update(repr_info)
 
             # Map observations and actions to latent
@@ -770,13 +776,13 @@ class iQRL(nn.Module):
             )
 
             ##### Update critic #####
-            info.update(self.critic_update_step(batch=nstep_batch))
+            info.update(self.critic_update_step(batch=nstep_batch, fake=fake))
 
             ##### Update actor less frequently than critic #####
             if self.critic_update_counter % self.cfg.actor_update_freq == 0:
-                info.update(self.pi_update_step(batch=nstep_batch))
+                info.update(self.pi_update_step(batch=nstep_batch, fake=fake))
 
-            if i % self.cfg.logging_freq == 0:
+            if i % self.cfg.logging_freq == 0 and not fake:
                 if self.cfg.verbose:
                     logger.info(
                         f"Iteration {i} | loss {info['enc_loss']:.3} | tc loss {info['tc_loss']:.3} | reward loss {info['reward_loss']:.3}"
@@ -784,50 +790,15 @@ class iQRL(nn.Module):
                 if wandb.run is not None and self.cfg.log_during_update:
                     wandb.log(info)
 
-        ###### Log some stuff ######
-        info["exploration_noise"] = self.exploration_noise
-        if wandb.run is not None and self.cfg.log_during_update:
-            wandb.log({"exploration_noise": self.exploration_noise})
+        if not fake:
+            # Update exploration noise
+            info["exploration_noise"] = self.exploration_noise
+            if wandb.run is not None and self.cfg.log_during_update:
+                wandb.log({"exploration_noise": self.exploration_noise})
+            self._exploration_noise_schedule.step()
 
-        self._exploration_noise_schedule.step()
-
-        if self.cfg.verbose:
-            logger.info("Finished training iQRL")
-        return info
-
-    def fake_update(
-        self, replay_buffer: ReplayBuffer, num_new_transitions: int, rb_idx: int
-    ) -> dict:
-        """Fake update for logging, just to get info for single task"""
-        num_updates = int(num_new_transitions * self.cfg.utd_ratio)
-        info = {}
-
-        for i in range(num_updates):
-            batch = replay_buffer.sample()
-
-            # Update enc less frequently than actor/critic
-            if i % self.cfg.enc_update_freq == 0:
-                zs, repr_info = self.representation_update_step(batch=batch, fake=True)
-                info.update(repr_info)
-
-            # Map observations and actions to latent
-            with torch.no_grad():
-                latent_obs = self.encoder.encode_obs(batch.observations, tar=False)
-            batch = batch._replace(z=latent_obs, next_z=zs)
-
-            ##### Make nstep returns #####
-            if self.cfg.horizon == 1:
-                raise NotImplementedError("Check N-step batch is made correctly if h=1")
-            nstep_batch = utils.to_nstep(
-                batch, nstep=self.cfg.nstep, gamma=self.cfg.gamma
-            )
-
-            ##### Update critic #####
-            info.update(self.critic_update_step(batch=nstep_batch, fake=True))
-
-            ##### Update actor less frequently than critic #####
-            if self.critic_update_counter % self.cfg.actor_update_freq == 0:
-                info.update(self.pi_update_step(batch=nstep_batch, fake=True))
+            if self.cfg.verbose:
+                logger.info("Finished training iQRL")
 
         return info
 

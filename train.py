@@ -67,8 +67,9 @@ class TrainConfig:
     eval_every_episodes: int = 20
     num_eval_episodes: int = 10
     capture_eval_video: bool = False  # Fails on AMD GPU so set to False
-    log_per_task: bool = False  # Log state&act ranges (in any case, log per-task eval)
-    visualize_latent_states: bool = True  # Visualize latent state space using t-SNE
+    log_per_task_sa: bool = False  # Log task-specific state & act ranges
+    log_per_task_q: bool = False  # Log task-specific Q-values
+    visualize_latent_states: bool = False  # Visualize latent state space using t-SNE
     visualize_latent_actions: bool = False  # Visualize latent action space using t-SNE
 
     # W&B config
@@ -321,9 +322,9 @@ def train(cfg: TrainConfig):
         eval_start_time = time.time()
         with torch.no_grad():
             episodic_returns = {env_name: [] for env_name in env_names}
-            episodic_successes = {env_name: [] for env_name in env_names}
-            states = {env_names[i]: [] for i in range(env_count)}
-            actions = {env_names[i]: [] for i in range(env_count)}
+            if cfg.log_per_task_sa:
+                all_states = {env_names[i]: [] for i in range(env_count)}
+                all_actions = {env_names[i]: [] for i in range(env_count)}
 
             for _ in range(cfg.num_eval_episodes):
                 eval_data = eval_env.rollout(
@@ -331,70 +332,64 @@ def train(cfg: TrainConfig):
                     policy=eval_policy_module,
                     break_when_any_done=False,
                 )
-                success = eval_data["next"].get("success", None)
 
-                if isinstance(eval_data, TensorDict):
-                    all_states = eval_data["observation"]["state"]
-                    all_actions = eval_data["action"]
-                else:
-                    all_states = eval_data["observation"].get_nestedtensor("state")
-                    all_actions = eval_data.get_nestedtensor("action")
-                for i, env_name in enumerate(env_names):
+                for task_i, env_name in enumerate(env_names):
                     episodic_returns[env_name].append(
-                        eval_data["next"]["episode_reward"][i][-1].cpu().item()
+                        eval_data["next"]["episode_reward"][task_i][-1].cpu().item()
                     )
-                    states[env_name].append(all_states[i])
-                    actions[env_name].append(all_actions[i])
 
-                    if success is not None:
-                        episodic_successes[env_name].append(success[i].any())
+                if cfg.log_per_task_sa:
+                    if isinstance(eval_data, TensorDict):
+                        states = eval_data["observation"]["state"]
+                        actions = eval_data["action"]
+                    else:
+                        states = eval_data["observation"].get_nestedtensor("state")
+                        actions = eval_data.get_nestedtensor("action")
+                    for task_i, env_name in enumerate(env_names):
+                        all_states[env_name].append(states[task_i].cpu())
+                        all_actions[env_name].append(actions[task_i].cpu())
 
-            for i, env_name in enumerate(env_names):
+            for task_i, env_name in enumerate(env_names):
                 ep_return = sum(episodic_returns[env_name]) / cfg.num_eval_episodes
                 eval_metrics[env_name]["episodic_return"] = ep_return
-                eval_metrics[env_name]["env_step"] = steps[i] * cfg.action_repeat
+                eval_metrics[env_name]["env_step"] = steps[task_i] * cfg.action_repeat
             eval_episodic_return_mean = np.mean(
                 [eval_metrics[env_name]["episodic_return"] for env_name in env_names]
             )
 
-            if success is not None:
-                # TODO is episodic_successes being calculated correctly
-                episodic_success = sum(episodic_successes) / cfg.num_eval_episodes
-                eval_metrics.update({"episodic_success": episodic_success})
-
         ##### Task-specific training metrics #####
-        if cfg.log_per_task:
-            for i in range(env_count):
-                task_metrics = agent.fake_update(
-                    replay_buffer=rb, num_new_transitions=500, rb_idx=i
-                )  # Contains min, max, mean, std of encoder gradients
-                task_metrics["env_step"] = steps[i] * cfg.action_repeat
+        if cfg.log_per_task_sa or cfg.log_per_task_q:
+            for task_i in range(env_count):
+                task_metrics = agent.update(
+                    replay_buffer=rb, num_new_transitions=500, fake=True, rb_idx=task_i
+                )
+                task_metrics["env_step"] = steps[task_i] * cfg.action_repeat
 
-                task_states = np.array(states[env_names[i]])
-                for dim in range(task_states.shape[-1]):
-                    states_single = task_states[..., dim]
-                    task_metrics.update(
-                        {
-                            f"state_min_{dim=}": states_single.min().item(),
-                            f"state_max_{dim=}": states_single.max().item(),
-                            f"state_mean_{dim=}": states_single.mean().item(),
-                            f"state_std_{dim=}": states_single.std().item(),
-                        }
-                    )
+                if cfg.log_per_task_sa:
+                    task_states = np.array(all_states[env_names[task_i]])
+                    for dim in range(task_states.shape[-1]):
+                        states_single = task_states[..., dim]
+                        task_metrics.update(
+                            {
+                                f"state_min_{dim=}": states_single.min().item(),
+                                f"state_max_{dim=}": states_single.max().item(),
+                                f"state_mean_{dim=}": states_single.mean().item(),
+                                f"state_std_{dim=}": states_single.std().item(),
+                            }
+                        )
+                    task_actions = np.array(all_actions[env_names[task_i]])
+                    for dim in range(task_actions.shape[-1]):
+                        actions_single = task_actions[..., dim]
+                        task_metrics.update(
+                            {
+                                f"action_min_{dim=}": actions_single.min().item(),
+                                f"action_max_{dim=}": actions_single.max().item(),
+                                f"action_mean_{dim=}": actions_single.mean().item(),
+                                f"action_std_{dim=}": actions_single.std().item(),
+                            }
+                        )
 
-                task_actions = np.array(actions[env_names[i]])
-                for dim in range(task_actions.shape[-1]):
-                    actions_single = task_actions[..., dim]
-                    task_metrics.update(
-                        {
-                            f"action_min_{dim=}": actions_single.min().item(),
-                            f"action_max_{dim=}": actions_single.max().item(),
-                            f"action_mean_{dim=}": actions_single.mean().item(),
-                            f"action_std_{dim=}": actions_single.std().item(),
-                        }
-                    )
-
-                writer.log_scalar(name=f"{env_names[i]}/", value=task_metrics)
+                writer.log_scalar(name=f"{env_names[task_i]}/", value=task_metrics)
 
         ##### Overall eval metrics #####
         eval_metrics.update(
@@ -604,11 +599,6 @@ def train(cfg: TrainConfig):
             rollout_metrics.update({env_name: {} for env_name in env_names})
             for i in range(env_count):
                 rollout_metrics[env_names[i]]["episodic_return"] = episode_rewards[i]
-
-            success = data["next"].get("success", None)
-            if success is not None:
-                episode_success = success.any()
-                rollout_metrics.update({"episodic_success": episode_success})
 
             writer.log_scalar(name="rollout/", value=rollout_metrics)
         else:
