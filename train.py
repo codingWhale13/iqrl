@@ -152,6 +152,7 @@ def train(cfg: TrainConfig):
     logging.basicConfig(level=logging.DEBUG)
     logger = logging.getLogger(__name__)
 
+    assert cfg.agent.rl_algo in ["TD3", "SAC"], "Only TD3 and SAC are supported"
     assert cfg.agent.obs_types == ["state"], "only obs_types=['state'] is supported"
     assert not cfg.eval_only or cfg.checkpoint is not None, "eval_only needs checkpoint"
 

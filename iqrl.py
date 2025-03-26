@@ -20,6 +20,10 @@ from utils import ReplayBuffer, ReplayBufferSamples
 
 logger = logging.getLogger(__name__)
 
+# SAC constants
+LOG_STD_MAX = 2
+LOG_STD_MIN = -5
+
 
 @dataclass
 class iQRLConfig:
@@ -61,6 +65,17 @@ class iQRLConfig:
     context_dim: Optional[int] = None  # Sensible default for embedding size: 96
     """What observation types to use? ["state"] or ["pixels"] or ["state", "pixels"]"""
     obs_types: List[str] = field(default_factory=lambda: ["state"])
+
+    """Which model-free RL algorithm to use, TD3 or SAC"""
+    rl_algo: str = "TD3"
+
+    """SAC CONFIG"""
+    """Entropy regularization coefficient"""
+    sac_alpha: float = 0.2
+    """The learning rate of the Q network network optimizer"""
+    sac_lr: float = 1e-3
+    """Automatic tuning of the entropy coefficient"""
+    sac_autotune: bool = True
 
     """ENCODER CONFIG"""
     """Size of latent state space"""
@@ -160,14 +175,38 @@ class Actor(nn.Module):
         self.cfg = cfg
         self.action_scale = action_scale
         self.action_bias = action_bias
-        self.mlp = h.mlp(in_dim, self.cfg.mlp_dims, act_dim)
 
-    def forward(self, s: torch.Tensor, ctx: list[torch.Tensor]):
+        out_dim = act_dim if cfg.rl_algo == "TD3" else act_dim * 2  # SAC -> 2 heads
+        self.mlp = h.mlp(in_dim, self.cfg.mlp_dims, out_dim)
+
+    def forward(
+        self, s: torch.Tensor, ctx: list[torch.Tensor]
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         x = torch.cat(ctx + [s], -1) if self.cfg.condition_actor else s
-        a = self.mlp(x)
-        a = torch.tanh(a)
-        a = a * self.action_scale + self.action_bias
-        return a
+        if self.cfg.rl_algo == "TD3":
+            a = self.mlp(x)
+            a = torch.tanh(a)
+            a = a * self.action_scale + self.action_bias
+
+            return a, None, None
+        else:  # SAC
+            mean, log_std = self.mlp(x).chunk(2, dim=-1)
+            log_std = torch.tanh(log_std)
+            log_std = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (log_std + 1)
+            std = log_std.exp()
+
+            normal = torch.distributions.Normal(mean, std)
+            x_t = normal.rsample()  # For reparameterization trick (mean + std * N(0,1))
+            y_t = torch.tanh(x_t)
+            action = y_t * self.action_scale + self.action_bias
+            log_prob = normal.log_prob(x_t)
+
+            # Enforcing action bound
+            log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + 1e-6)
+            log_prob = log_prob.sum(1, keepdim=True)
+            mean = torch.tanh(mean) * self.action_scale + self.action_bias
+
+            return action, log_prob, mean
 
 
 class Critic(nn.Module):
@@ -741,6 +780,15 @@ class iQRL(nn.Module):
             num_steps=cfg.exploration_noise_num_steps,
         )
 
+        ##### Automatic entropy tuning #####
+        if cfg.rl_algo == "SAC" and cfg.sac_autotune:
+            self.target_entropy = -act_dim
+            self.sac_log_alpha = torch.zeros(1, requires_grad=True, device=cfg.device)
+            self.sac_alpha = self.sac_log_alpha.exp().item()
+            self.sac_alpha_optimizer = torch.optim.Adam([self.sac_log_alpha], lr=cfg.sac_lr)
+        else:
+            self.sac_alpha = cfg.sac_alpha
+
         # Counters for number of param updates
         self.critic_update_counter = 0
         self.pi_update_counter = 0
@@ -856,14 +904,16 @@ class iQRL(nn.Module):
                 next_s = batch.next_z["codes"]
 
             a = self.encoder.encode_action(batch.actions, ctx=ctx)
-            a_next_raw = (
-                self.pi(next_s, ctx=ctx, tar=True, eval_mode=True, smooth=True)
-                * batch.observations["act_mask"]
+            a_next_raw, a_next_log_prob, _ = self.pi(
+                next_s, ctx=ctx, tar=True, eval_mode=True, smooth=True
             )
+            a_next_raw *= batch.observations["act_mask"]
             a_next = self.encoder.encode_action(a_next_raw, ctx=ctx)
 
             min_q_next_tar = self.Q_tar(s=next_s, a=a_next, ctx=ctx, return_type="min")
             min_q_next_tar = min_q_next_tar[..., 0]
+            if self.cfg.rl_algo == "SAC":
+                min_q_next_tar -= self.cfg.sac_alpha * next_a_log_prob[:, 0]
 
             assert min_q_next_tar.shape == batch.rewards.shape
             next_q_value = (
@@ -912,16 +962,21 @@ class iQRL(nn.Module):
         s = batch.z["state"]
 
         ctx = self.encoder.get_context(batch.observations)
-        pi_actions = self._pi(s=s, ctx=ctx) * batch.observations["act_mask"]
+        pi_actions, log_pi, _ = self._pi(s=s, ctx=ctx)
+        pi_actions *= batch.observations["act_mask"]
         pi_actions = self.encoder.encode_action(pi_actions, ctx=ctx)
-        Q_values = self.Q(s=s, a=pi_actions, ctx=ctx, return_type="avg")
 
         if self.cfg.use_offline_data:
+            Q_values = self.Q(s=s, a=pi_actions, ctx=ctx, return_type="avg")
             # Add behavior cloning regularization
             lmbda = self.cfg.bc_alpha / Q_values.abs().mean().detach()
             pi_loss = -lmbda * Q_values.mean() + F.mse_loss(pi_actions, batch.actions)
-        else:
+        elif self.cfg.rl_algo == "TD3":
+            Q_values = self.Q(s=s, a=pi_actions, ctx=ctx, return_type="avg")
             pi_loss = -Q_values.mean()
+        elif self.cfg.rl_algo == "SAC":
+            Q_values = self.Q(s=s, a=pi_actions, ctx=ctx, return_type="min")
+            pi_loss = (self.cfg.sac_alpha * log_pi - Q_values).mean()
 
         if not fake:  # Actually perform the optimization step
             ##### Optimize actor #####
@@ -933,10 +988,29 @@ class iQRL(nn.Module):
             h.soft_update_params(self._pi, self._pi_tar, tau=self.cfg.tau)
 
         self._pi.eval()
-        return {
+
+        if self.cfg.rl_algo == "SAC" and self.cfg.sac_autotune:
+            with torch.no_grad():
+                _, log_pi, _ = self._pi(s=s, ctx=ctx)
+            alpha_loss = (
+                -self.sac_log_alpha.exp() * (log_pi + self.target_entropy).detach()
+            ).mean()
+
+            self.sac_alpha_optimizer.zero_grad()
+            alpha_loss.backward()
+            self.sac_alpha_optimizer.step()
+            self.sac_alpha = self.sac_log_alpha.exp().item()
+
+        info = {
             "actor_loss": pi_loss.item(),
             "actor_update_counter": self.pi_update_counter,
         }
+        if self.cfg.rl_algo == "SAC":
+            info["alpha"] = self.sac_alpha
+            if self.cfg.sac_autotune:
+                info["alpha_loss"] = alpha_loss.item()
+
+        return info
 
     def set_state_norm(self, state_norm: dict):
         self.state_norm = state_norm  # (body_id, task_id)->(mean, std)
@@ -971,7 +1045,7 @@ class iQRL(nn.Module):
 
         s = self.encoder.encode_obs(obs, tar=False).to(torch.float)
         ctx = self.encoder.get_context(obs)
-        a = self.pi(s["state"], ctx, tar=False, eval_mode=eval_mode)
+        a, _, _ = self.pi(s["state"], ctx, tar=False, eval_mode=eval_mode)
 
         if is_flat_obs:
             body_id = obs["body_id"][0].item()
@@ -995,8 +1069,8 @@ class iQRL(nn.Module):
         tar: bool = False,
         eval_mode: bool = False,
         smooth: bool = False,
-    ) -> torch.Tensor:
-        a = self._pi_tar(s, ctx) if tar else self._pi(s, ctx)
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        a, log_prob, mean = self._pi_tar(s, ctx) if tar else self._pi(s, ctx)
         if not eval_mode:
             a += torch.normal(0, self._pi.action_scale * self.exploration_noise)
         if smooth:
@@ -1005,7 +1079,7 @@ class iQRL(nn.Module):
             ).clamp(-self.cfg.noise_clip, self.cfg.noise_clip) * self._pi.action_scale
             a += clipped_noise
         a = a.clamp(self.act_spec_low, self.act_spec_high)
-        return a
+        return a, log_prob, mean
 
     @property
     def exploration_noise(self) -> h.LinearSchedule:
