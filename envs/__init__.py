@@ -56,14 +56,20 @@ class BodyAndTaskIDs(Transform):
     ) -> TensorDictBase:
         return self._call(tensordict_reset)
 
-    def transform_observation_spec(self, observation_spec):
+    def transform_observation_spec(self, observation_spec: Composite) -> Composite:
         if self.body_id is not None:
             observation_spec["observation"]["body_id"] = Categorical(
-                n=self.n_body, shape=self.body_id.shape, dtype=torch.float
+                n=self.n_body,
+                shape=self.body_id.shape,
+                dtype=torch.float,
+                device=observation_spec.device,
             )
         if self.task_id is not None:
             observation_spec["observation"]["task_id"] = Categorical(
-                n=self.n_task, shape=self.task_id.shape, dtype=torch.float
+                n=self.n_task,
+                shape=self.task_id.shape,
+                dtype=torch.float,
+                device=observation_spec.device,
             )
         return observation_spec
 

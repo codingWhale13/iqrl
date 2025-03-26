@@ -197,6 +197,7 @@ def train(cfg: TrainConfig):
         "logger": writer,
         "n_body": n_body,
         "n_task": n_task,
+        "device": cfg.device,
     }
     create_fn = [
         partial(
