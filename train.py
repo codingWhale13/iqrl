@@ -218,9 +218,7 @@ def train(cfg: TrainConfig):
     od = [obs_spec["state"].shape[0] for obs_spec in obs_specs]
     ad = [act_spec.shape[0] for act_spec in act_specs]
     create_fn = [
-        partial(
-            fn, obs_dim=od[i], act_dim=ad[i], max_obs_dim=max(od), max_act_dim=max(ad)
-        )
+        partial(fn, obs_dim=od[i], act_dim=ad[i], max_act_dim=max(ad))
         for i, fn in enumerate(create_fn)
     ]
 
@@ -243,7 +241,6 @@ def train(cfg: TrainConfig):
                 use_offline_data=False,
                 obs_dim=od[i],
                 act_dim=ad[i],
-                max_obs_dim=max(od),
                 max_act_dim=max(ad),
                 **common_kwargs_for_make_env,
             )

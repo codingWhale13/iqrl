@@ -5,7 +5,7 @@ import gymnasium as gym
 from dm_control import suite
 from tensordict import TensorDictBase
 import torch
-from torchrl.data.tensor_specs import Bounded, Categorical
+from torchrl.data.tensor_specs import Bounded, Categorical, Composite
 from torchrl.envs import GymEnv, StepCounter, TransformedEnv
 from torchrl.envs.transforms import (
     CatFrames,
@@ -72,39 +72,19 @@ class BodyAndTaskIDs(Transform):
 
 
 class TaskMasker(Transform):
-    """A transform to add a mask to an env, indicating relevant obs and action dims."""
+    """A transform to add a mask to an env, indicating relevant action dims."""
 
-    def __init__(
-        self,
-        obs_dim: Optional[int],
-        act_dim: Optional[int],
-        max_obs_dim: Optional[int],
-        max_act_dim: Optional[int],
-    ):
+    def __init__(self, act_dim: int, max_act_dim: int):
         super().__init__()
-        self.obs_dim = obs_dim
-        self.act_dim = act_dim
-        self.max_obs_dim = max_obs_dim
+
+        assert act_dim <= max_act_dim
         self.max_act_dim = max_act_dim
 
-        self.obs_mask = None
-        self.act_mask = None
-        if self.obs_dim is not None and self.max_obs_dim is not None:
-            self.obs_mask = self._make_mask(self.obs_dim, self.max_obs_dim)
-        if self.act_dim is not None and self.max_act_dim is not None:
-            self.act_mask = self._make_mask(self.act_dim, self.max_act_dim)
-
-    def _make_mask(self, relevant_dim: int, mask_dim: int):
-        assert relevant_dim <= mask_dim
-        mask = torch.zeros(mask_dim, dtype=torch.float32)
-        mask[:relevant_dim] = 1.0
-        return mask
+        self.act_mask = torch.zeros(max_act_dim, dtype=torch.float32)
+        self.act_mask[:act_dim] = 1.0
 
     def _call(self, tensordict):
-        if self.obs_mask is not None:
-            tensordict["observation"].set("obs_mask", self.obs_mask)
-        if self.act_mask is not None:
-            tensordict["observation"].set("act_mask", self.act_mask)
+        tensordict["observation"].set("act_mask", self.act_mask)
         return tensordict
 
     def _reset(
@@ -112,15 +92,14 @@ class TaskMasker(Transform):
     ) -> TensorDictBase:
         return self._call(tensordict_reset)
 
-    def transform_observation_spec(self, observation_spec):
-        if self.obs_mask is not None:
-            observation_spec["observation"]["obs_mask"] = Bounded(
-                low=0, high=1, shape=(self.max_obs_dim,), dtype=torch.float
-            )
-        if self.act_dim is not None:
-            observation_spec["observation"]["act_mask"] = Bounded(
-                low=0, high=1, shape=(self.max_act_dim,), dtype=torch.float
-            )
+    def transform_observation_spec(self, observation_spec: Composite) -> Composite:
+        observation_spec["observation"]["act_mask"] = Bounded(
+            low=0,
+            high=1,
+            shape=(self.max_act_dim,),
+            dtype=torch.float,
+            device=observation_spec.device,
+        )
         return observation_spec
 
     def forward(self, tensordict: TensorDictBase) -> TensorDictBase:
@@ -136,7 +115,6 @@ def make_env(
     n_task: Optional[int] = None,
     obs_dim: Optional[int] = None,
     act_dim: Optional[int] = None,
-    max_obs_dim: Optional[int] = None,
     max_act_dim: Optional[int] = None,
     use_offline_data: bool = False,
     seed: int = 42,
@@ -184,14 +162,8 @@ def make_env(
     transforms.append(
         BodyAndTaskIDs(body_id=body_id, task_id=task_id, n_body=n_body, n_task=n_task)
     )
-    if max_obs_dim is not None or max_act_dim is not None:
-        tm = TaskMasker(
-            obs_dim=obs_dim,
-            act_dim=act_dim,
-            max_obs_dim=max_obs_dim,
-            max_act_dim=max_act_dim,
-        )
-        transforms.append(tm)
+    if act_dim is not None and max_act_dim is not None:
+        transforms.append(TaskMasker(act_dim=act_dim, max_act_dim=max_act_dim))
 
     if from_pixels:
         transforms.append(ToTensorImage(in_keys="pixels"))
