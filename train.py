@@ -129,7 +129,12 @@ def train(cfg: TrainConfig):
     import seaborn as sns
     from sklearn.manifold import TSNE
     from termcolor import colored
-    from tensordict import LazyStackedTensorDict, TensorDict, pad_sequence
+    from tensordict import (
+        LazyStackedTensorDict,
+        TensorDict,
+        pad_sequence,
+        set_get_defaults_to_none,
+    )
     from tensordict.nn import TensorDictModule
     from torchrl.data.tensor_specs import BoundedContinuous
     from torchrl.envs import ParallelEnv
@@ -141,6 +146,8 @@ def train(cfg: TrainConfig):
     from iqrl import iQRL
     import utils.helper as h
     from utils import ReplayBuffer
+
+    set_get_defaults_to_none(True)  # Useful for e.g. `obs.get(optional_param)`
 
     logging.basicConfig(level=logging.DEBUG)
     logger = logging.getLogger(__name__)

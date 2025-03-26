@@ -307,8 +307,13 @@ class Encoder(nn.Module):
         """
 
         context = []
-        body_id = obs.get("body_id").long().squeeze(-1).to(self.cfg.device)
-        task_id = obs.get("task_id").long().squeeze(-1).to(self.cfg.device)
+        body_id = obs.get("body_id")
+        task_id = obs.get("task_id")
+        if body_id is not None:
+            body_id = body_id.long().squeeze(-1).to(self.cfg.device)
+        if task_id is not None:
+            task_id = task_id.long().squeeze(-1).to(self.cfg.device)
+
         if self.cfg.context_dim is None:
             # Use one-hot encoding
             if body_id is not None:
