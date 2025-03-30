@@ -435,7 +435,8 @@ def train(cfg: TrainConfig):
             if cfg.visualize_latent_states or cfg.visualize_latent_actions:
 
                 def log_tsne(latent_data: np.ndarray, states_or_actions: str):
-                    tsne = TSNE(verbose=1, max_iter=5000)
+                    perp = min(30.0, cfg.max_episode_steps // cfg.action_repeat - 1.0)
+                    tsne = TSNE(verbose=1, max_iter=5000, perplexity=perp)
                     tsne_results = tsne.fit_transform(latent_data)
                     env_idx = [env_names[i] for i in range(env_count) for _ in range(n)]
                     tsne_data = pd.DataFrame(
