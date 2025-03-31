@@ -1,4 +1,5 @@
 # Code adapted from https://github.com/DLR-RM/stable-baselines3/blob/master/stable_baselines3/common/buffers.py
+import copy
 import logging
 from typing import NamedTuple, Optional
 
@@ -22,6 +23,34 @@ class ReplayBufferSamples(NamedTuple):
     next_state_gammas: torch.Tensor
     z: Optional[TensorDict]
     next_z: Optional[TensorDict]
+
+
+def merge_replay_buffer_samples(
+    samples: list[ReplayBufferSamples],
+) -> ReplayBufferSamples:
+    """Merges ReplayBufferSamples into a single instance with added batch dimension."""
+    if not samples:
+        raise ValueError("Cannot merge empty samples list")
+
+    merged = {}
+    for field in ReplayBufferSamples._fields:
+        values = [getattr(s, field) for s in samples]
+        if field in ["observations", "next_observations"]:
+            merged[field] = TensorDict.stack(values, dim=0)
+        elif field in ["z", "next_z"]:
+            if all(v is None for v in values):
+                merged[field] = None
+            elif all(v is not None for v in values):
+                merged[field] = TensorDict.stack(values, dim=0)
+            else:
+                raise ValueError(f"Mixed None/non-None values in {field} field")
+        else:
+            # Validate tensor fields
+            if not all(isinstance(v, torch.Tensor) for v in values):
+                raise TypeError(f"Non-tensor found in {field} field")
+            merged[field] = torch.stack(values, dim=0)
+
+    return ReplayBufferSamples(**merged)
 
 
 class ReplayBuffer:
@@ -153,3 +182,47 @@ def to_nstep(
     )
 
     return nstep_batch
+
+
+@torch.no_grad()
+def to_all_nstep(
+    batch: ReplayBufferSamples, max_n: int, gamma: float = 0.99
+) -> ReplayBufferSamples:
+    """Form n-step samples for n=1, 2, ..., max_n (truncate if timeout)"""
+    dones = torch.zeros_like(batch.dones[0], dtype=torch.bool)
+    terminateds = torch.zeros_like(batch.terminateds[0], dtype=torch.bool)
+    rewards = torch.zeros_like(batch.rewards[0])
+    next_state_gammas = torch.ones_like(batch.dones[0], dtype=torch.float32)
+    next_obs = torch.zeros_like(batch.observations[0])
+    next_z = torch.zeros_like(batch.next_z[0]) if batch.next_z is not None else None
+
+    nstep_batches = []
+    for t in range(max_n):
+        next_obs = torch.where(dones[..., None], next_obs, batch.next_observations[t])
+        if next_z is not None:
+            next_z = torch.where(dones[..., None], next_z, batch.next_z[t])
+        dones = torch.logical_or(dones, batch.dones[t])
+        next_state_gammas *= torch.where(dones, 1, gamma)
+        terminateds *= torch.where(
+            dones, terminateds, torch.logical_or(terminateds, batch.terminateds[t])
+        )
+        rewards += torch.where(dones, 0, gamma**t * batch.rewards[t])
+
+        nstep_batch = copy.deepcopy(
+            ReplayBufferSamples(
+                observations=batch.observations[0],
+                z=(batch.z[0] if batch.z is not None else None),
+                # ^ these do not change; v these attributes have been n-stepped
+                actions=batch.actions[0],
+                next_observations=next_obs,
+                dones=dones.to(torch.int),
+                terminateds=terminateds.to(torch.int),
+                rewards=rewards,
+                next_state_gammas=next_state_gammas,
+                next_z=next_z,
+            )
+        )
+        nstep_batches.append(nstep_batch)
+
+    nstep_batches_all = merge_replay_buffer_samples(nstep_batches)
+    return nstep_batches_all

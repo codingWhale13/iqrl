@@ -57,17 +57,18 @@ class iQRLConfig:
     num_critics: int = 5
     """Number of critics to sample"""
     q_sample_size: int = 2
-    """Use N-step returns for Q-learning?"""
-    nstep: int = 1  # nstep returns
     """In critic update, next_s can be "encoded" (as in iQRL) or "rollout\""""
     critic_next_s: str = "encoded"
     """Body and task embedding size; use None for one-hot encoding instead"""
     context_dim: Optional[int] = None  # Sensible default for embedding size: 96
     """What observation types to use? ["state"] or ["pixels"] or ["state", "pixels"]"""
     obs_types: List[str] = field(default_factory=lambda: ["state"])
-
     """Which model-free RL algorithm to use, TD3 or SAC"""
     rl_algo: str = "TD3"
+    """Use N-step returns for Q-learning? Set to -1 for lambda-returns"""
+    nstep: int = 1
+    median_lambda_return: bool = True  # Used only for lambda-returns, i.e. nstep=-1
+    return_lambda: float = 0.95  # Used only if nstep=-1 and median_lambda_return=False
 
     """SAC CONFIG"""
     """Entropy regularization coefficient"""
@@ -152,7 +153,7 @@ class iQRLConfig:
     """OTHER"""
     """Call wandb.log() while updating the agent (creates "Charts" section in wandb)"""
     log_during_update: bool = False  # Avoid memory-intensive logging by default
-    """Logging frequency, only takes effect if log_during_update==True"""
+    """Logging frequency, only takes effect if log_during_update=True"""
     logging_freq: int = 100
     """If True try to compile all NNs"""
     compile: bool = False
@@ -703,6 +704,7 @@ class iQRL(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.ids_to_dims = ids_to_dims
+        self.use_td_lambda = self.cfg.nstep == -1
 
         ##### Assert observation types (1d low and high; broadcasted later) #####
         assert len(obs_specs) == len(act_specs)
@@ -848,19 +850,17 @@ class iQRL(nn.Module):
                     next_z = self.encoder.latent_rollout(batch, grad=False)[1:]
             batch = batch._replace(z=z, next_z=next_z)
 
-            ##### Make nstep returns: (H, B, whatever) -> (B, whatever) #####
+            # Avoid edge case when making nstep batch (H, B, whatever) -> (B, whatever)
             if self.cfg.horizon == 1:
                 raise NotImplementedError("Check N-step batch is made correctly if h=1")
-            nstep_batch = utils.to_nstep(
-                batch, nstep=self.cfg.nstep, gamma=self.cfg.gamma
-            )
 
             ##### Update critic #####
-            info.update(self.critic_update_step(batch=nstep_batch, fake=fake))
+            info.update(self.critic_update_step(batch=batch, fake=fake))
 
             ##### Update actor less frequently than critic #####
             if self.critic_update_counter % self.cfg.actor_update_freq == 0:
-                info.update(self.pi_update_step(batch=nstep_batch, fake=fake))
+                actor_batch = utils.to_nstep(batch, nstep=1, gamma=self.cfg.gamma)
+                info.update(self.pi_update_step(batch=actor_batch, fake=fake))
 
             if i % self.cfg.logging_freq == 0 and not fake:
                 if self.cfg.verbose:
@@ -908,6 +908,57 @@ class iQRL(nn.Module):
         self.encoder.eval()
         return info
 
+    def get_nstep_return(self, nstep_batch: ReplayBufferSamples) -> torch.Tensor:
+        with torch.no_grad():
+            next_z = nstep_batch.next_z["state"]
+            # Calculate next_a, i.e. the action that agent takes in next_z
+            ctx = self.encoder.get_context(nstep_batch.observations)
+            next_a_raw, _, _ = self.pi(
+                next_z, ctx=ctx, tar=True, eval_mode=True, smooth=True
+            )
+            next_a_raw *= nstep_batch.observations["act_mask"]
+            next_a = self.encoder.encode_action(next_a_raw, ctx=ctx)
+
+            # Calculate Q target, using next_s and next_a to "peek into the future"
+            min_q_next_tar = self.Q_tar(z=next_z, a=next_a, ctx=ctx, return_type="min")
+            min_q_next_tar = min_q_next_tar[..., 0]
+            assert min_q_next_tar.shape == nstep_batch.rewards.shape
+
+            nstep_return = (
+                nstep_batch.rewards
+                + (1 - nstep_batch.terminateds)
+                * nstep_batch.next_state_gammas
+                * min_q_next_tar
+            )
+
+        return nstep_return
+
+    def _get_lambda_return(
+        self, nstep_returns: torch.Tensor, lam: float
+    ) -> torch.Tensor:
+        lambda_return = torch.zeros(self.cfg.batch_size, device=self.cfg.device)
+        for n in range(1, self.cfg.horizon + 1):
+            # NOTE: nstep_returns use 0-based index -> nstep_returns[n - 1]
+            weighted_nstep_return = lam ** (n - 1) * nstep_returns[n - 1]
+            if n < self.cfg.horizon:
+                weighted_nstep_return *= 1 - lam  # Weight by normalization constant
+            lambda_return += weighted_nstep_return
+
+        return lambda_return
+
+    def get_lambda_return(self, all_nstep_batch: ReplayBufferSamples) -> torch.Tensor:
+        nstep_returns = self.get_nstep_return(all_nstep_batch)
+
+        if self.cfg.median_lambda_return:
+            # Calculate median lambda-return of k+1 lambda values, same as Daley (2018)
+            k = 20
+            lambda_returns_list = [
+                self._get_lambda_return(nstep_returns, lam=i / k) for i in range(k + 1)
+            ]
+            return torch.stack(lambda_returns_list, dim=0).median(dim=0).values
+        else:
+            return self._get_lambda_return(nstep_returns, lam=self.cfg.return_lambda)
+
     def critic_update_step(
         self, batch: ReplayBufferSamples, fake: bool = False
     ) -> dict:
@@ -915,40 +966,32 @@ class iQRL(nn.Module):
         self.Q_tar.train()
 
         # Check batch shapes
-        assert batch.rewards.ndim == 1
         assert batch.rewards.shape[0] == batch.observations.shape[0]
         assert batch.z is not None
+        assert batch.rewards.shape == (self.cfg.horizon, self.cfg.batch_size)
 
-        # Make Q target
-        ctx = self.encoder.get_context(batch.observations)
+        # Extract current (z, a) from full batch to make Q-prediction
+        z = batch.z["state"][0]
+        ctx = self.encoder.get_context(batch.observations[0])
+        a = self.encoder.encode_action(batch.actions[0], ctx=ctx)
+        q_values = self.Q(z=z, a=a, ctx=ctx, return_type="all").squeeze(-1)
+
+        # Make Q-target
         with torch.no_grad():
-            z = batch.z["state"]
-            next_z = batch.next_z["state"]
-            a = self.encoder.encode_action(batch.actions, ctx=ctx)
-
-            # Calculate next_a, i.e. the action that agent takes in next_s
-            next_a_raw, next_a_log_prob, _ = self.pi(
-                next_z, ctx=ctx, tar=True, eval_mode=True, smooth=True
-            )
-            next_a_raw *= batch.observations["act_mask"]
-            next_a = self.encoder.encode_action(next_a_raw, ctx=ctx)
-
-            # Calculate Q target, using next_s and next_a to "peek in the future"
-            min_q_next_tar = self.Q_tar(z=next_z, a=next_a, ctx=ctx, return_type="min")
-            min_q_next_tar = min_q_next_tar[..., 0]
-            if self.cfg.rl_algo == "SAC":
-                min_q_next_tar -= self.cfg.sac_alpha * next_a_log_prob[:, 0]
-
-            assert min_q_next_tar.shape == batch.rewards.shape
-            next_q_value = (
-                batch.rewards
-                + (1 - batch.terminateds) * batch.next_state_gammas * min_q_next_tar
-            )
-
-        q_values = self.Q(z=z, a=a, ctx=ctx, return_type="all")[..., 0]
+            if self.use_td_lambda:
+                all_nstep_batch = utils.to_all_nstep(
+                    batch, self.cfg.horizon, self.cfg.gamma
+                )
+                next_q_value = self.get_lambda_return(all_nstep_batch)
+            else:
+                nstep_batch = utils.to_nstep(
+                    batch, nstep=self.cfg.nstep, gamma=self.cfg.gamma
+                )
+                next_q_value = self.get_nstep_return(nstep_batch)
         next_q_value = next_q_value.broadcast_to(q_values.shape)  # Consider num_critics
-        q_loss = F.mse_loss(q_values, next_q_value)
 
+        # Calculate Q-loss
+        q_loss = F.mse_loss(q_values, next_q_value)
         if not fake:  # Actually perform the optimization step
             self.critic_update_counter += 1
 
