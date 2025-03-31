@@ -180,9 +180,9 @@ class Actor(nn.Module):
         self.mlp = h.mlp(in_dim, self.cfg.mlp_dims, out_dim)
 
     def forward(
-        self, s: torch.Tensor, ctx: list[torch.Tensor]
+        self, z: torch.Tensor, ctx: list[torch.Tensor]
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
-        x = torch.cat(ctx + [s], -1) if self.cfg.condition_actor else s
+        x = torch.cat(ctx + [z], -1) if self.cfg.condition_actor else z
         if self.cfg.rl_algo == "TD3":
             a = self.mlp(x)
             a = torch.tanh(a)
@@ -230,12 +230,12 @@ class Critic(nn.Module):
 
     def forward(
         self,
-        s: torch.Tensor,
+        z: torch.Tensor,
         a: torch.Tensor,
         ctx: list[torch.Tensor],
         return_type: str = "all",
     ):
-        x = torch.cat(ctx + [s, a] if self.cfg.condition_critic else [s, a], -1)
+        x = torch.cat(ctx + [z, a] if self.cfg.condition_critic else [z, a], -1)
         qs = self.qs(x)
         if return_type == "all":
             return qs
@@ -416,12 +416,12 @@ class Encoder(nn.Module):
 
     def trans(
         self,
-        s: torch.Tensor,
+        z: torch.Tensor,
         a: torch.Tensor,
         ctx: list[torch.Tensor],
         unc_prop_mode: Optional[str] = None,
     ):
-        sa = torch.concat((ctx + [s, a] if self.cfg.condition_dynamics else [s, a]), -1)
+        za = torch.concat((ctx + [z, a] if self.cfg.condition_dynamics else [z, a]), -1)
 
         if (
             self.cfg.consistency_loss == "cross-entropy"
@@ -429,7 +429,7 @@ class Encoder(nn.Module):
         ):
             """Make predictions with dynamics as NN classifier"""
             # Returns logits for each class
-            logits = self._trans(sa)
+            logits = self._trans(za)
             logits = logits.reshape(-1, self.org_latent_dim, self._fsq.codebook_size)
 
             if unc_prop_mode is None:
@@ -444,58 +444,58 @@ class Encoder(nn.Module):
                     return torch.argmax(adjusted_logits, dim=-1)
 
                 indices = gumbel_sample(logits)
-                next_s = self._fsq.implicit_codebook[indices].flatten(-2)
-                next_s_dict = {
-                    "codes": next_s,
+                next_z = self._fsq.implicit_codebook[indices].flatten(-2)
+                next_z_dict = {
+                    "codes": next_z,
                     "logits": logits,
                     "indices": indices.to(torch.float),
                 }
             elif "sample" in unc_prop_mode:
-                s_one_hot = torch.nn.functional.gumbel_softmax(
+                z_one_hot = torch.nn.functional.gumbel_softmax(
                     logits, tau=1, hard=True, dim=-1
                 )
                 codebook = self._fsq.implicit_codebook
-                next_s = einsum(s_one_hot, codebook, "b d c, c l -> b d l")
-                next_s = rearrange(next_s, "b d l -> b (d l)")
-                next_s_dict = {
-                    "codes": next_s,
+                next_z = einsum(z_one_hot, codebook, "b d c, c l -> b d l")
+                next_z = rearrange(next_z, "b d l -> b (d l)")
+                next_z_dict = {
+                    "codes": next_z,
                     "logits": logits,
-                    "one-hot": s_one_hot.flatten(-2),
+                    "one-hot": z_one_hot.flatten(-2),
                 }
             elif "weighted-avg" in unc_prop_mode:
                 probs = F.softmax(logits, dim=-1)
                 codebook = self._fsq.implicit_codebook
-                next_s = einsum(probs, codebook, "b d c, c l -> b d l")
-                next_s = rearrange(next_s, "b d l -> b (d l)")
-                next_s_dict = {"codes": next_s, "logits": logits}
+                next_z = einsum(probs, codebook, "b d c, c l -> b d l")
+                next_z = rearrange(next_z, "b d l -> b (d l)")
+                next_z_dict = {"codes": next_z, "logits": logits}
             else:
                 raise NotImplementedError
         else:
             """Make predictions with dynamics regression model"""
-            delta_s = self._trans(sa)
-            next_s = s + delta_s if self.cfg.use_delta else delta_s
+            delta_z = self._trans(za)
+            next_z = z + delta_z if self.cfg.use_delta else delta_z
             if self.cfg.use_fsq:
-                next_s = self.quantize(next_s)["codes"]
+                next_z = self.quantize(next_z)["codes"]
 
-            next_s_dict = {"codes": next_s}
+            next_z_dict = {"codes": next_z}
 
         if self.cfg.use_fsq:
-            shape = *next_s.shape[0:-1], self.org_latent_dim, self.num_channels
+            shape = *next_z.shape[0:-1], self.org_latent_dim, self.num_channels
         else:
-            shape = *next_s.shape[0:-1], self.org_latent_dim
-        next_s_dict.update({"z": next_s.reshape(shape)})
+            shape = *next_z.shape[0:-1], self.org_latent_dim
+        next_z_dict.update({"z": next_z.reshape(shape)})
 
         return TensorDict(
-            next_s_dict,
-            batch_size=torch.Size([s.shape[0]]),
+            next_z_dict,
+            batch_size=torch.Size([z.shape[0]]),
             device=self.cfg.device,
         )
 
     def reward(
-        self, s: torch.Tensor, a: torch.Tensor, ctx: list[torch.Tensor]
+        self, z: torch.Tensor, a: torch.Tensor, ctx: list[torch.Tensor]
     ) -> torch.Tensor:
-        sa = torch.cat(ctx + [s, a] if self.cfg.condition_reward else [s, a], -1)
-        r = self._reward(sa)
+        za = torch.cat(ctx + [z, a] if self.cfg.condition_reward else [z, a], -1)
+        r = self._reward(za)
         r = self.r_scale_fn(r)
         return r
 
@@ -505,15 +505,13 @@ class Encoder(nn.Module):
         td["state"] = td["codes"]
         return td
 
-    def loss(self, batch: ReplayBufferSamples) -> Tuple[torch.Tensor, TensorDict, dict]:
-        tc_loss = torch.zeros(1).to(self.cfg.device)
-        reward_loss = torch.zeros(1).to(self.cfg.device)
-
-        ##### Create targets #####
-        with torch.no_grad():
-            zs_tar = self.encode_obs(batch.next_observations, tar=True)
-
-        ##### Create TensorDicts to fill #####
+    def latent_rollout(self, batch: ReplayBufferSamples, grad: bool) -> TensorDict:
+        """
+        Using only the initial obs, predict future latent states with learned dynamics.
+        NOTE: Returns H+1 latent states, because zs[0] is just the latent initial state.
+        NOTE: latent rollout is just used for consistency loss - MultiQRL is model-free.
+        """
+        # Prepare zs TensorDict
         zs = {
             "codes": torch.empty(
                 self.cfg.horizon + 1,
@@ -540,26 +538,45 @@ class Encoder(nn.Module):
             device=self.cfg.device,
         )
 
+        with torch.set_grad_enabled(grad):
+            # Prepare context of correct dimensionality and encode all actions
+            ctx = self.get_context(batch.observations)
+            ctx_t = self.get_context(batch.observations[0])
+            actions = self.encode_action(batch.actions, ctx=ctx, tar=False)
+
+            # Rollout next H latent states
+            z = self.encode_obs(batch.observations[0])["codes"]
+            zs["codes"][0] = z
+            dones = torch.zeros_like(batch.dones[0], dtype=torch.bool)
+            terminateds_or_dones = torch.zeros_like(batch.dones, dtype=torch.bool)
+            for t in range(self.cfg.horizon):
+                dones = torch.where(terminateds_or_dones[t], dones, batch.dones[t])
+                terminateds_or_dones[t] = torch.logical_or(
+                    terminateds_or_dones[t],
+                    torch.logical_or(dones, batch.terminateds[t]),
+                )
+
+                # Predict next latent state
+                next_z = self.trans(z=z, a=actions[t], ctx=ctx_t)
+                zs[t + 1] = next_z
+
+                # Don't forget this
+                z = next_z["codes"]
+
+        zs["state"] = zs["codes"]  # For more convenient access
+
+        return zs
+
+    def loss(self, batch: ReplayBufferSamples) -> Tuple[torch.Tensor, dict]:
+        tc_loss = torch.zeros(1).to(self.cfg.device)
+        reward_loss = torch.zeros(1).to(self.cfg.device)
+
+        ##### Create targets #####
+        with torch.no_grad():
+            zs_tar = self.encode_obs(batch.next_observations, tar=True)
+
         ##### Latent rollout #####
-        s = self.encode_obs(batch.observations[0])["codes"]
-        ctx = self.get_context(batch.observations)
-        actions = self.encode_action(batch.actions, ctx=ctx, tar=False)
-        zs["codes"][0] = s
-        dones = torch.zeros_like(batch.dones[0], dtype=torch.bool)
-        terminateds_or_dones = torch.zeros_like(batch.dones, dtype=torch.bool)
-        ctx_t = self.get_context(batch.observations[0])
-        for t in range(self.cfg.horizon):
-            dones = torch.where(terminateds_or_dones[t], dones, batch.dones[t])
-            terminateds_or_dones[t] = torch.logical_or(
-                terminateds_or_dones[t], torch.logical_or(dones, batch.terminateds[t])
-            )
-
-            # Predict next (maybe latent) state
-            next_s = self.trans(s=s, a=actions[t], ctx=ctx_t)
-            zs[t + 1] = next_s
-
-            # Don't forget this
-            s = next_s["codes"]
+        zs = self.latent_rollout(batch, grad=True)
 
         rho = torch.tensor([self.cfg.rho**t for t in range(self.cfg.horizon)]).to(
             self.cfg.device
@@ -569,7 +586,11 @@ class Encoder(nn.Module):
         ##### (Optional) Reward prediction loss #####
         if self.cfg.use_rew_loss:
             r_tar = batch.rewards  # Reward target
-            r_pred = self.reward(s=zs["codes"][:-1], a=actions, ctx=ctx)[..., 0]
+
+            ctx = self.get_context(batch.observations)
+            actions = self.encode_action(batch.actions, ctx=ctx, tar=False)
+            r_pred = self.reward(z=zs["codes"][:-1], a=actions, ctx=ctx)[..., 0]
+
             assert r_pred.ndim == 2 and r_tar.ndim == 2
             _reward_loss = (r_pred - r_tar) ** 2
             _rho_reward_loss = rho * torch.mean((1 - dones) * _reward_loss, -1)
@@ -638,7 +659,7 @@ class Encoder(nn.Module):
                 }
             )
 
-        return loss, zs, info
+        return loss, info
 
     def metrics(self, batch: ReplayBufferSamples) -> dict:
         z = self.encode_obs(batch.observations[0])
@@ -785,7 +806,9 @@ class iQRL(nn.Module):
             self.target_entropy = -act_dim
             self.sac_log_alpha = torch.zeros(1, requires_grad=True, device=cfg.device)
             self.sac_alpha = self.sac_log_alpha.exp().item()
-            self.sac_alpha_optimizer = torch.optim.Adam([self.sac_log_alpha], lr=cfg.sac_lr)
+            self.sac_alpha_optimizer = torch.optim.Adam(
+                [self.sac_log_alpha], lr=cfg.sac_lr
+            )
         else:
             self.sac_alpha = cfg.sac_alpha
 
@@ -813,15 +836,19 @@ class iQRL(nn.Module):
 
             # Update enc less frequently than actor/critic
             if i % self.cfg.enc_update_freq == 0:
-                zs, repr_info = self.representation_update_step(batch=batch, fake=fake)
-                info.update(repr_info)
+                info.update(self.representation_update_step(batch=batch, fake=fake))
 
-            # Map observations and actions to latent
+            # Map observations to latent states
             with torch.no_grad():
-                latent_obs = self.encoder.encode_obs(batch.observations, tar=False)
-            batch = batch._replace(z=latent_obs, next_z=zs)
+                z = self.encoder.encode_obs(batch.observations, tar=False)
+                if self.cfg.critic_next_s == "encoded":
+                    next_z = self.encoder.encode_obs(batch.next_observations, tar=False)
+                elif self.cfg.critic_next_s == "rollout":
+                    # Do rollout, now *after* representation update; throw away index 0
+                    next_z = self.encoder.latent_rollout(batch, grad=False)[1:]
+            batch = batch._replace(z=z, next_z=next_z)
 
-            ##### Make nstep returns: (H+1, B, L) -> (B, L) #####
+            ##### Make nstep returns: (H, B, whatever) -> (B, whatever) #####
             if self.cfg.horizon == 1:
                 raise NotImplementedError("Check N-step batch is made correctly if h=1")
             nstep_batch = utils.to_nstep(
@@ -857,9 +884,9 @@ class iQRL(nn.Module):
 
     def representation_update_step(
         self, batch: ReplayBufferSamples, fake: bool = False
-    ) -> Tuple[TensorDict, dict]:
+    ) -> dict:
         self.encoder.train()
-        loss, zs, info = self.encoder.loss(batch=batch)
+        loss, info = self.encoder.loss(batch=batch)
         self.enc_opt.zero_grad(set_to_none=True)
         loss.backward()
 
@@ -879,7 +906,7 @@ class iQRL(nn.Module):
             )
 
         self.encoder.eval()
-        return zs, info
+        return info
 
     def critic_update_step(
         self, batch: ReplayBufferSamples, fake: bool = False
@@ -895,22 +922,19 @@ class iQRL(nn.Module):
         # Make Q target
         ctx = self.encoder.get_context(batch.observations)
         with torch.no_grad():
-            s = batch.z["state"]
-
-            if self.cfg.critic_next_s == "encoded":
-                next_s_raw = batch.next_observations
-                next_s = self.encoder.encode_obs(next_s_raw, tar=False)["state"]
-            elif self.cfg.critic_next_s == "rollout":
-                next_s = batch.next_z["codes"]
-
+            z = batch.z["state"]
+            next_z = batch.next_z["state"]
             a = self.encoder.encode_action(batch.actions, ctx=ctx)
-            a_next_raw, a_next_log_prob, _ = self.pi(
-                next_s, ctx=ctx, tar=True, eval_mode=True, smooth=True
-            )
-            a_next_raw *= batch.observations["act_mask"]
-            a_next = self.encoder.encode_action(a_next_raw, ctx=ctx)
 
-            min_q_next_tar = self.Q_tar(s=next_s, a=a_next, ctx=ctx, return_type="min")
+            # Calculate next_a, i.e. the action that agent takes in next_s
+            next_a_raw, next_a_log_prob, _ = self.pi(
+                next_z, ctx=ctx, tar=True, eval_mode=True, smooth=True
+            )
+            next_a_raw *= batch.observations["act_mask"]
+            next_a = self.encoder.encode_action(next_a_raw, ctx=ctx)
+
+            # Calculate Q target, using next_s and next_a to "peek in the future"
+            min_q_next_tar = self.Q_tar(z=next_z, a=next_a, ctx=ctx, return_type="min")
             min_q_next_tar = min_q_next_tar[..., 0]
             if self.cfg.rl_algo == "SAC":
                 min_q_next_tar -= self.cfg.sac_alpha * next_a_log_prob[:, 0]
@@ -921,8 +945,8 @@ class iQRL(nn.Module):
                 + (1 - batch.terminateds) * batch.next_state_gammas * min_q_next_tar
             )
 
-        q_values = self.Q(s=s, a=a, ctx=ctx, return_type="all")[..., 0]
-        next_q_value = next_q_value.broadcast_to(q_values.shape)
+        q_values = self.Q(z=z, a=a, ctx=ctx, return_type="all")[..., 0]
+        next_q_value = next_q_value.broadcast_to(q_values.shape)  # Consider num_critics
         q_loss = F.mse_loss(q_values, next_q_value)
 
         if not fake:  # Actually perform the optimization step
@@ -959,23 +983,23 @@ class iQRL(nn.Module):
         self._pi.train()
 
         assert batch.z is not None
-        s = batch.z["state"]
+        z = batch.z["state"]
 
         ctx = self.encoder.get_context(batch.observations)
-        pi_actions, log_pi, _ = self._pi(s=s, ctx=ctx)
+        pi_actions, log_pi, _ = self._pi(z=z, ctx=ctx)
         pi_actions *= batch.observations["act_mask"]
         pi_actions = self.encoder.encode_action(pi_actions, ctx=ctx)
 
         if self.cfg.use_offline_data:
-            Q_values = self.Q(s=s, a=pi_actions, ctx=ctx, return_type="avg")
+            Q_values = self.Q(z=z, a=pi_actions, ctx=ctx, return_type="avg")
             # Add behavior cloning regularization
             lmbda = self.cfg.bc_alpha / Q_values.abs().mean().detach()
             pi_loss = -lmbda * Q_values.mean() + F.mse_loss(pi_actions, batch.actions)
         elif self.cfg.rl_algo == "TD3":
-            Q_values = self.Q(s=s, a=pi_actions, ctx=ctx, return_type="avg")
+            Q_values = self.Q(z=z, a=pi_actions, ctx=ctx, return_type="avg")
             pi_loss = -Q_values.mean()
         elif self.cfg.rl_algo == "SAC":
-            Q_values = self.Q(s=s, a=pi_actions, ctx=ctx, return_type="min")
+            Q_values = self.Q(z=z, a=pi_actions, ctx=ctx, return_type="min")
             pi_loss = (self.cfg.sac_alpha * log_pi - Q_values).mean()
 
         if not fake:  # Actually perform the optimization step
@@ -991,7 +1015,7 @@ class iQRL(nn.Module):
 
         if self.cfg.rl_algo == "SAC" and self.cfg.sac_autotune:
             with torch.no_grad():
-                _, log_pi, _ = self._pi(s=s, ctx=ctx)
+                _, log_pi, _ = self._pi(z=z, ctx=ctx)
             alpha_loss = (
                 -self.sac_log_alpha.exp() * (log_pi + self.target_entropy).detach()
             ).mean()
@@ -1064,13 +1088,13 @@ class iQRL(nn.Module):
 
     def pi(
         self,
-        s: torch.Tensor,
+        z: torch.Tensor,
         ctx: list[torch.Tensor],
         tar: bool = False,
         eval_mode: bool = False,
         smooth: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
-        a, log_prob, mean = self._pi_tar(s, ctx) if tar else self._pi(s, ctx)
+        a, log_prob, mean = self._pi_tar(z, ctx) if tar else self._pi(z, ctx)
         if not eval_mode:
             a += torch.normal(0, self._pi.action_scale * self.exploration_noise)
         if smooth:
