@@ -590,7 +590,7 @@ class Encoder(nn.Module):
 
             ctx = self.get_context(batch.observations)
             actions = self.encode_action(batch.actions, ctx=ctx, tar=False)
-            r_pred = self.reward(z=zs["codes"][:-1], a=actions, ctx=ctx)[..., 0]
+            r_pred = self.reward(z=zs["codes"][:-1], a=actions, ctx=ctx).squeeze(-1)
 
             assert r_pred.ndim == 2 and r_tar.ndim == 2
             _reward_loss = (r_pred - r_tar) ** 2
@@ -920,8 +920,9 @@ class iQRL(nn.Module):
             next_a = self.encoder.encode_action(next_a_raw, ctx=ctx)
 
             # Calculate Q target, using next_s and next_a to "peek into the future"
-            min_q_next_tar = self.Q_tar(z=next_z, a=next_a, ctx=ctx, return_type="min")
-            min_q_next_tar = min_q_next_tar[..., 0]
+            min_q_next_tar = self.Q_tar(
+                z=next_z, a=next_a, ctx=ctx, return_type="min"
+            ).squeeze(-1)
             assert min_q_next_tar.shape == nstep_batch.rewards.shape
 
             nstep_return = (
