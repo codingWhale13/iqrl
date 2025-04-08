@@ -614,9 +614,11 @@ def train(cfg: TrainConfig):
 
         ##### Train agent (after collecting some random episodes) #####
         if cfg.use_offline_data or episode_idx > cfg.random_episodes - 1:
+            update_start_time = time.time()
             train_metrics = agent.update(
                 replay_buffer=rb, num_new_transitions=num_new_transitions
             )
+            train_metrics["update_time"] = time.time() - update_start_time
             train_metrics["env_step"] = sum(steps) * cfg.action_repeat
             writer.log_scalar(name="train/", value=train_metrics)
             torch.save({"model": agent.state_dict()}, "./checkpoint")
