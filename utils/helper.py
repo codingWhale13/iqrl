@@ -5,8 +5,6 @@ from typing import List, Optional, Sequence
 import numpy as np
 import torch
 import torch.nn as nn
-import utils
-from tensordict import TensorDictBase
 from torch.func import functional_call, stack_module_state
 from torch.linalg import cond, matrix_rank
 from vector_quantize_pytorch import FSQ as _FSQ

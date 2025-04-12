@@ -115,10 +115,6 @@ class iQRLConfig:
     reward_coef: float = 1.0
     """Consistency coefficient"""
     consistency_coef: float = 1.0
-    """If not None then bound the reward output"""
-    r_min: Optional[float] = None
-    """If not None then bound the reward output"""
-    r_max: Optional[float] = None
     """Which loss function to use for consistency loss?"""
     consistency_loss: str = "cosine"  # "cross-entropy", "mse", "cosine"
     """Predict logits with dynamics NN or use cosine/mse between pred and codebook?  (only for cross-entropy)"""
@@ -333,12 +329,6 @@ class Encoder(nn.Module):
                 cfg.mlp_dims,
                 1,
             )
-            if cfg.r_max is not None and cfg.r_min is not None:
-                r_scale = (cfg.r_max - cfg.r_min) / 2.0
-                r_bias = (cfg.r_max + cfg.r_min) / 2.0
-                self.r_scale_fn = lambda r: torch.tanh(r) * r_scale + r_bias
-            else:
-                self.r_scale_fn = lambda r: r
 
     def get_context(self, obs: TensorDictBase) -> list[torch.Tensor]:
         """
@@ -497,7 +487,6 @@ class Encoder(nn.Module):
     ) -> torch.Tensor:
         za = torch.cat(ctx + [z, a] if self.cfg.condition_reward else [z, a], -1)
         r = self._reward(za)
-        r = self.r_scale_fn(r)
         return r
 
     def quantize(self, z: torch.Tensor) -> dict[str, torch.Tensor]:
