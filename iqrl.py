@@ -853,12 +853,14 @@ class iQRL(nn.Module):
 
             # Map observations to latent states
             with torch.no_grad():
-                z = self.encoder.encode_obs(batch.observations, tar=False)
                 if self.cfg.critic_next_s == "encoded":
+                    z = self.encoder.encode_obs(batch.observations, tar=False)
                     next_z = self.encoder.encode_obs(batch.next_observations, tar=False)
                 elif self.cfg.critic_next_s == "rollout":
-                    # Do rollout, now *after* representation update; throw away index 0
-                    next_z = self.encoder.latent_rollout(batch, grad=False)[1:]
+                    # Do rollout, now *after* representation update
+                    zs = self.encoder.latent_rollout(batch, grad=False)
+                    z = zs[:-1]
+                    next_z = zs[1:]
             batch = batch._replace(z=z, next_z=next_z)
 
             # Avoid edge case when making nstep batch (H, B, whatever) -> (B, whatever)
@@ -870,8 +872,7 @@ class iQRL(nn.Module):
 
             ##### Update actor less frequently than critic #####
             if self.critic_update_counter % self.cfg.actor_update_freq == 0:
-                actor_batch = utils.to_nstep(batch, nstep=1, gamma=self.cfg.gamma)
-                info.update(self.pi_update_step(batch=actor_batch, fake=fake))
+                info.update(self.pi_update_step(batch=batch, fake=fake))
 
             if i % self.cfg.logging_freq == 0 and not fake:
                 if self.cfg.verbose:
@@ -1047,12 +1048,16 @@ class iQRL(nn.Module):
         self.pi_update_counter += 1
         self._pi.train()
 
-        assert batch.z is not None
-        z = batch.z["state"]
+        # Recover all H+1 zs from z and next_z -> do (H+1)*B updates instead of H*B
+        z = torch.cat([batch.z["state"], batch.next_z["state"][-1].unsqueeze(0)])
 
-        ctx = self.encoder.get_context(batch.observations)
-        pi_actions, log_pi, _ = self._pi(z=z, ctx=ctx)
-        pi_actions *= batch.observations["act_mask"]
+        # Get policy actions
+        H = self.cfg.horizon
+        ctx = self.encoder.get_context(batch.observations[0])
+        for i in range(len(ctx)):
+            ctx[i] = ctx[i].expand(H + 1, -1, -1)
+        pi_actions, log_pi, _ = self.pi(z=z, ctx=ctx, eval_mode=True)
+        pi_actions *= batch.observations["act_mask"][0].expand(H + 1, -1, -1)
         pi_actions = self.encoder.encode_action(pi_actions, ctx=ctx)
 
         if self.cfg.use_offline_data:
@@ -1062,7 +1067,9 @@ class iQRL(nn.Module):
             pi_loss = -lmbda * Q_values.mean() + F.mse_loss(pi_actions, batch.actions)
         elif self.cfg.rl_algo == "TD3":
             Q_values = self.Q(z=z, a=pi_actions, ctx=ctx, return_type="avg")
-            pi_loss = -Q_values.mean()
+            # Discount future predicitons by rho to take into account higher uncertainty
+            rho = torch.tensor([self.cfg.rho**t for t in range(H + 1)])
+            pi_loss = -(rho.to(self.cfg.device) * Q_values.mean(dim=(1, 2))).mean()
         elif self.cfg.rl_algo == "SAC":
             Q_values = self.Q(z=z, a=pi_actions, ctx=ctx, return_type="min")
             pi_loss = (self.cfg.sac_alpha * log_pi - Q_values).mean()
