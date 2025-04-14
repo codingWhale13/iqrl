@@ -115,6 +115,14 @@ class iQRLConfig:
     reward_coef: float = 1.0
     """Consistency coefficient"""
     consistency_coef: float = 1.0
+    """Use "mse" or "soft-ce" (soft cross-entropy) in critic and reward updates"""
+    Q_and_rew_loss: str = "mse"
+    """Number of bins and value range (only used if Q_and_rew_loss="soft-ce")"""
+    num_bins: int = 101
+    vmin: float = -10.0
+    vmax: float = 10.0
+    bin_size: float = -1  # Depends on num_bins, vmin, vmax; determined later
+
     """Which loss function to use for consistency loss?"""
     consistency_loss: str = "cosine"  # "cross-entropy", "mse", "cosine"
     """Predict logits with dynamics NN or use cosine/mse between pred and codebook?  (only for cross-entropy)"""
@@ -215,7 +223,7 @@ class Critic(nn.Module):
             h.mlp(
                 in_dim=in_dim,
                 mlp_dims=cfg.mlp_dims,
-                out_dim=1,
+                out_dim=1 if self.cfg.Q_and_rew_loss == "mse" else cfg.num_bins,
                 dropout=cfg.q_dropout,
             ).to(cfg.device)
             for _ in range(cfg.num_critics)
@@ -241,6 +249,8 @@ class Critic(nn.Module):
         if self.cfg.q_sample_size is not None:
             idxs = torch.randperm(qs.shape[0])[: self.cfg.q_sample_size]
             qs = qs[idxs]
+            if self.cfg.Q_and_rew_loss == "soft-ce":
+                qs = h.two_hot_inv(qs, self.cfg)  # Last dim goes from bin_size to 1
 
         if return_type == "min":
             return torch.min(qs, 0)[0]
@@ -323,11 +333,11 @@ class Encoder(nn.Module):
         ##### Init optional reward model #####
         if cfg.use_rew_loss:
             self._reward = h.mlp(
-                latent_obs_dim
+                in_dim=latent_obs_dim
                 + latent_act_dim
                 + (ctx_dim if cfg.condition_reward else 0),
-                cfg.mlp_dims,
-                1,
+                mlp_dims=cfg.mlp_dims,
+                out_dim=1 if cfg.Q_and_rew_loss == "mse" else cfg.num_bins,
             )
 
     def get_context(self, obs: TensorDictBase) -> list[torch.Tensor]:
@@ -575,14 +585,21 @@ class Encoder(nn.Module):
 
         ##### (Optional) Reward prediction loss #####
         if self.cfg.use_rew_loss:
-            r_tar = batch.rewards  # Reward target
+            # Reward target
+            r_tar = batch.rewards
 
+            # Reward prediction
             ctx = self.get_context(batch.observations)
             actions = self.encode_action(batch.actions, ctx=ctx, tar=False)
             r_pred = self.reward(z=zs["codes"][:-1], a=actions, ctx=ctx).squeeze(-1)
 
-            assert r_pred.ndim == 2 and r_tar.ndim == 2
-            _reward_loss = (r_pred - r_tar) ** 2
+            if self.cfg.Q_and_rew_loss == "mse":
+                assert r_pred.ndim == r_tar.ndim == 2
+                _reward_loss = (r_pred - r_tar) ** 2
+            elif self.cfg.Q_and_rew_loss == "soft-ce":
+                _reward_loss = torch.empty_like(r_tar)
+                for t in range(self.cfg.horizon):
+                    _reward_loss[t] = h.soft_ce(r_pred[t], r_tar[t], self.cfg)
             _rho_reward_loss = rho * torch.mean((1 - dones) * _reward_loss, -1)
             reward_loss = torch.mean(_rho_reward_loss)
 
@@ -725,6 +742,9 @@ class iQRL(nn.Module):
                     f"{cfg.latent_dim*self.num_channels} to account for FSQ channels"
                 )
                 cfg.latent_dim *= self.num_channels
+
+        ##### Prepare for twohot loss: Determine bin size for discrete regression #####
+        self.cfg.bin_size = (cfg.vmax - cfg.vmin) / (cfg.num_bins - 1)
 
         ##### Calculate max dims of observations, actions and body&task IDs #####
         obs_dim = max(np.prod(obs["state"].shape).item() for obs in obs_specs)
@@ -978,10 +998,17 @@ class iQRL(nn.Module):
                     batch, nstep=self.cfg.nstep, gamma=self.cfg.gamma
                 )
                 next_q_value = self.get_nstep_return(nstep_batch)
-        next_q_value = next_q_value.broadcast_to(q_values.shape)  # Consider num_critics
 
         # Calculate Q-loss
-        q_loss = F.mse_loss(q_values, next_q_value)
+        if self.cfg.Q_and_rew_loss == "mse":
+            next_q_value = next_q_value.broadcast_to(q_values.shape)  # For num_critics
+            q_loss = F.mse_loss(q_values, next_q_value)
+        elif self.cfg.Q_and_rew_loss == "soft-ce":
+            q_loss = 0
+            for i in range(self.cfg.num_critics):
+                q_loss += h.soft_ce(q_values[i], next_q_value, self.cfg).mean()
+            q_loss /= self.cfg.num_critics
+
         if not fake:  # Actually perform the optimization step
             self.critic_update_counter += 1
 
