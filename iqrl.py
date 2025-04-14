@@ -920,6 +920,33 @@ class iQRL(nn.Module):
         self.encoder.eval()
         return info
 
+    def get_td_target(self, batch: ReplayBufferSamples) -> torch.Tensor:
+        # Assert that we're using the full batch with shape (H, B)
+        assert batch.rewards.shape[:2] == (self.cfg.horizon, self.cfg.batch_size)
+
+        with torch.no_grad():
+            next_z = batch.next_z["state"]
+            # Calculate next_a, i.e. the action that agent takes in next_z
+            ctx = self.encoder.get_context(batch.observations)
+            next_a_raw, _, _ = self.pi(
+                next_z, ctx=ctx, tar=True, eval_mode=True, smooth=True
+            )
+            next_a_raw *= batch.observations["act_mask"]
+            next_a = self.encoder.encode_action(next_a_raw, ctx=ctx)
+
+            # Calculate Q target, using next_s and next_a to "peek into the future"
+            min_q_next_tar = self.Q_tar(
+                z=next_z, a=next_a, ctx=ctx, return_type="min"
+            ).squeeze(-1)
+            assert min_q_next_tar.shape == batch.rewards.shape
+
+            td_target = (
+                batch.rewards
+                + (1 - batch.terminateds) * self.cfg.gamma * min_q_next_tar
+            )
+
+        return td_target
+
     def get_nstep_return(self, nstep_batch: ReplayBufferSamples) -> torch.Tensor:
         with torch.no_grad():
             next_z = nstep_batch.next_z["state"]
@@ -983,34 +1010,41 @@ class iQRL(nn.Module):
         assert batch.z is not None
         assert batch.rewards.shape == (self.cfg.horizon, self.cfg.batch_size)
 
-        # Extract current (z, a) from full batch to make Q-prediction
-        z = batch.z["state"][0]
-        ctx = self.encoder.get_context(batch.observations[0])
-        a = self.encoder.encode_action(batch.actions[0], ctx=ctx)
-        q_values = self.Q(z=z, a=a, ctx=ctx, return_type="all").squeeze(-1)
+        # Make Q prediction
+        z = batch.z["state"]
+        ctx = self.encoder.get_context(batch.observations)
+        a = self.encoder.encode_action(batch.actions, ctx=ctx)
+        if self.cfg.nstep == 1:
+            q_pred = self.Q(z=z, a=a, ctx=ctx, return_type="all").squeeze(-1)  # (H, B)
+        else:
+            ctx_0 = self.encoder.get_context(batch.observations[0])  # Items: shape (B,)
+            q_pred = self.Q(z=z[0], a=a[0], ctx=ctx_0, return_type="all").squeeze(-1)
 
-        # Make Q-target
-        with torch.no_grad():
-            if self.use_td_lambda:
-                all_nstep_batch = utils.to_all_nstep(
-                    batch, self.cfg.horizon, self.cfg.gamma
-                )
-                next_q_value = self.get_lambda_return(all_nstep_batch)
-            else:
-                nstep_batch = utils.to_nstep(
-                    batch, nstep=self.cfg.nstep, gamma=self.cfg.gamma
-                )
-                next_q_value = self.get_nstep_return(nstep_batch)
+        # Make Q target
+        if self.cfg.nstep == 1:
+            q_target = self.get_td_target(batch)  # Shape (H, B)
+        if self.use_td_lambda:
+            all_nstep_batch = utils.to_all_nstep(
+                batch, self.cfg.horizon, self.cfg.gamma
+            )
+            q_target = self.get_lambda_return(all_nstep_batch)  # Shape (B,)
+        else:
+            nstep_batch = utils.to_nstep(
+                batch, nstep=self.cfg.nstep, gamma=self.cfg.gamma
+            )
+            q_target = self.get_nstep_return(nstep_batch)  # Shape (B,)
 
         # Calculate Q-loss
         if self.cfg.Q_and_rew_loss == "mse":
-            next_q_value = next_q_value.broadcast_to(q_values.shape)  # For num_critics
-            q_loss = F.mse_loss(q_values, next_q_value)
+            q_target = q_target.broadcast_to(q_pred.shape)  # For num_critics
+            q_loss = F.mse_loss(q_pred, q_target)
         elif self.cfg.Q_and_rew_loss == "soft-ce":
             q_loss = 0
             for i in range(self.cfg.num_critics):
-                q_loss += h.soft_ce(q_values[i], next_q_value, self.cfg).mean()
+                q_loss += h.soft_ce(q_pred[i], q_target, self.cfg).mean()
             q_loss /= self.cfg.num_critics
+        if self.cfg.nstep == 1:
+            q_loss /= self.cfg.horizon  # Account for H dimension
 
         if not fake:  # Actually perform the optimization step
             self.critic_update_counter += 1
@@ -1030,18 +1064,18 @@ class iQRL(nn.Module):
         self.Q_tar.eval()
         info = {
             "q_loss": q_loss.item(),
-            "q_mean": q_values.mean().item(),
-            "q_min": q_values.min().item(),
-            "q_max": q_values.max().item(),
-            "q_std": q_values.std().item(),
-            "q_targ_mean": next_q_value.mean().item(),
-            "q_targ_min": next_q_value.min().item(),
-            "q_targ_max": next_q_value.max().item(),
-            "q_targ_std": next_q_value.std().item(),
+            "q_mean": q_pred.mean().item(),
+            "q_min": q_pred.min().item(),
+            "q_max": q_pred.max().item(),
+            "q_std": q_pred.std().item(),
+            "q_targ_mean": q_target.mean().item(),
+            "q_targ_min": q_target.min().item(),
+            "q_targ_max": q_target.max().item(),
+            "q_targ_std": q_target.std().item(),
             "critic_update_counter": self.critic_update_counter,
         }
         for i in range(self.cfg.num_critics):
-            info.update({f"q{i+1}_values": q_values[i].mean().item()})
+            info.update({f"q{i+1}_values": q_pred[i].mean().item()})
         return info
 
     def pi_update_step(self, batch: ReplayBufferSamples, fake: bool = False) -> dict:
