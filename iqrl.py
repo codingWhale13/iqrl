@@ -925,9 +925,13 @@ class iQRL(nn.Module):
             # Calculate next_a, i.e. the action that agent takes in next_z
             ctx = self.encoder.get_context(nstep_batch.observations)
             next_a_raw, _, _ = self.pi(
-                next_z, ctx=ctx, tar=True, eval_mode=True, smooth=True
+                next_z,
+                ctx=ctx,
+                act_mask=nstep_batch.observations["act_mask"],
+                tar=True,
+                eval_mode=True,
+                smooth=True,
             )
-            next_a_raw *= nstep_batch.observations["act_mask"]
             next_a = self.encoder.encode_action(next_a_raw, ctx=ctx)
 
             # Calculate Q target, using next_s and next_a to "peek into the future"
@@ -1052,8 +1056,9 @@ class iQRL(nn.Module):
         z = batch.z["state"]
 
         ctx = self.encoder.get_context(batch.observations)
-        pi_actions, log_pi, _ = self._pi(z=z, ctx=ctx)
-        pi_actions *= batch.observations["act_mask"]
+        pi_actions, log_pi, _ = self.pi(
+            z=z, ctx=ctx, act_mask=batch.observations["act_mask"], eval_mode=True
+        )
         pi_actions = self.encoder.encode_action(pi_actions, ctx=ctx)
 
         if self.cfg.use_offline_data:
@@ -1081,7 +1086,12 @@ class iQRL(nn.Module):
 
         if self.cfg.rl_algo == "SAC" and self.cfg.sac_autotune:
             with torch.no_grad():
-                _, log_pi, _ = self._pi(z=z, ctx=ctx)
+                _, log_pi, _ = self.pi(
+                    z=z,
+                    ctx=ctx,
+                    act_mask=batch.observations["act_mask"],
+                    eval_mode=True,
+                )
             alpha_loss = (
                 -self.sac_log_alpha.exp() * (log_pi + self.target_entropy).detach()
             ).mean()
@@ -1135,8 +1145,11 @@ class iQRL(nn.Module):
 
         s = self.encoder.encode_obs(obs, tar=False).to(torch.float)
         ctx = self.encoder.get_context(obs)
-        a, _, _ = self.pi(s["state"], ctx, tar=False, eval_mode=eval_mode)
+        a, _, _ = self.pi(
+            s["state"], ctx, act_mask=obs["act_mask"], tar=False, eval_mode=eval_mode
+        )
 
+        # NOTE: It's not enough to set unused dims to 0, we cut them appropriately below
         if is_flat_obs:
             body_id = obs["body_id"][0].item()
             task_id = obs["task_id"][0].item()
@@ -1156,6 +1169,7 @@ class iQRL(nn.Module):
         self,
         z: torch.Tensor,
         ctx: list[torch.Tensor],
+        act_mask: torch.Tensor,
         tar: bool = False,
         eval_mode: bool = False,
         smooth: bool = False,
@@ -1168,6 +1182,7 @@ class iQRL(nn.Module):
                 torch.randn_like(a, device=self.cfg.device) * self.cfg.policy_noise
             ).clamp(-self.cfg.noise_clip, self.cfg.noise_clip) * self._pi.action_scale
             a += clipped_noise
+        a *= act_mask
         a = a.clamp(self.act_spec_low, self.act_spec_high)
         return a, log_prob, mean
 
