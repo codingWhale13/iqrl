@@ -249,8 +249,10 @@ class Critic(nn.Module):
         if self.cfg.q_sample_size is not None:
             idxs = torch.randperm(qs.shape[0])[: self.cfg.q_sample_size]
             qs = qs[idxs]
-            if self.cfg.Q_and_rew_loss == "soft-ce":
-                qs = h.two_hot_inv(qs, self.cfg)  # Last dim goes from bin_size to 1
+
+        # Map back Q-values: last dim goes from bin_size to 1
+        if self.cfg.Q_and_rew_loss == "soft-ce":
+            qs = h.two_hot_inv(qs, self.cfg)
 
         if return_type == "min":
             return torch.min(qs, 0)[0]
@@ -1019,6 +1021,9 @@ class iQRL(nn.Module):
 
             ##### Update the target network #####
             h.soft_update_params(self.Q, self.Q_tar, tau=self.cfg.tau)
+
+        # For logging, change two-hot encoded vectors back to scalars
+        q_values = h.two_hot_inv(q_values, self.cfg)
 
         self.Q.eval()
         self.Q_tar.eval()
