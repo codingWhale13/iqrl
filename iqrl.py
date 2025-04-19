@@ -210,7 +210,7 @@ class Actor(nn.Module):
 
             # Enforcing action bound
             log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + 1e-6)
-            log_prob = log_prob.sum(1, keepdim=True)
+            log_prob = log_prob.sum(-1, keepdim=True)
             mean = torch.tanh(mean) * self.action_scale + self.action_bias
 
             return action, log_prob, mean
@@ -926,7 +926,7 @@ class iQRL(nn.Module):
             next_z = nstep_batch.next_z["state"]
             # Calculate next_a, i.e. the action that agent takes in next_z
             ctx = self.encoder.get_context(nstep_batch.observations)
-            next_a_raw, _, _ = self.pi(
+            next_a_raw, next_z_log_pi, _ = self.pi(
                 next_z,
                 ctx=ctx,
                 act_mask=nstep_batch.observations["act_mask"],
@@ -937,9 +937,10 @@ class iQRL(nn.Module):
             next_a = self.encoder.encode_action(next_a_raw, ctx=ctx)
 
             # Calculate Q target, using next_s and next_a to "peek into the future"
-            min_q_next_tar = self.Q_tar(
-                z=next_z, a=next_a, ctx=ctx, return_type="min"
-            ).squeeze(-1)
+            min_q_next_tar = self.Q_tar(z=next_z, a=next_a, ctx=ctx, return_type="min")
+            if self.cfg.rl_algo == "SAC":
+                min_q_next_tar -= self.cfg.entropy_coef * self.sac_alpha * next_z_log_pi
+            min_q_next_tar = min_q_next_tar.squeeze(-1)
             assert min_q_next_tar.shape == nstep_batch.rewards.shape
 
             nstep_return = (
@@ -1072,7 +1073,7 @@ class iQRL(nn.Module):
             pi_loss = -Q_values.mean()
         elif self.cfg.rl_algo == "SAC":
             # Sprinkle some entropy in the mix
-            scaled_entropy = -log_pi * self.cfg.sac_alpha
+            scaled_entropy = -log_pi * self.sac_alpha
             pi_loss = -(self.cfg.entropy_coef * scaled_entropy + Q_values).mean()
 
         if not fake:  # Actually perform the optimization step
