@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # SAC constants
 LOG_STD_MAX = 2
-LOG_STD_MIN = -5
+LOG_STD_MIN = -10  # TD-MPC2 uses -10; CleanRL uses -5
 
 
 @dataclass
@@ -71,6 +71,8 @@ class iQRLConfig:
     return_lambda: float = 0.95  # Used only if nstep=-1 and median_lambda_return=False
 
     """SAC CONFIG"""
+    """Entropy coefficient, constant to reduce the influence of entropy regularization"""
+    entropy_coef: float = 1e-4
     """Entropy regularization coefficient"""
     sac_alpha: float = 0.2
     """The learning rate of the Q network network optimizer"""
@@ -1061,17 +1063,17 @@ class iQRL(nn.Module):
         )
         pi_actions = self.encoder.encode_action(pi_actions, ctx=ctx)
 
+        Q_values = self.Q(z=z, a=pi_actions, ctx=ctx, return_type="avg")
         if self.cfg.use_offline_data:
-            Q_values = self.Q(z=z, a=pi_actions, ctx=ctx, return_type="avg")
             # Add behavior cloning regularization
             lmbda = self.cfg.bc_alpha / Q_values.abs().mean().detach()
             pi_loss = -lmbda * Q_values.mean() + F.mse_loss(pi_actions, batch.actions)
         elif self.cfg.rl_algo == "TD3":
-            Q_values = self.Q(z=z, a=pi_actions, ctx=ctx, return_type="avg")
             pi_loss = -Q_values.mean()
         elif self.cfg.rl_algo == "SAC":
-            Q_values = self.Q(z=z, a=pi_actions, ctx=ctx, return_type="min")
-            pi_loss = (self.cfg.sac_alpha * log_pi - Q_values).mean()
+            # Sprinkle some entropy in the mix
+            scaled_entropy = -log_pi * self.cfg.sac_alpha
+            pi_loss = -(self.cfg.entropy_coef * scaled_entropy + Q_values).mean()
 
         if not fake:  # Actually perform the optimization step
             ##### Optimize actor #####
@@ -1145,9 +1147,11 @@ class iQRL(nn.Module):
 
         s = self.encoder.encode_obs(obs, tar=False).to(torch.float)
         ctx = self.encoder.get_context(obs)
-        a, _, _ = self.pi(
+        a, _, mean = self.pi(
             s["state"], ctx, act_mask=obs["act_mask"], tar=False, eval_mode=eval_mode
         )
+        if eval_mode and self.cfg.rl_algo == "SAC":
+            a = mean
 
         # NOTE: It's not enough to set unused dims to 0, we cut them appropriately below
         if is_flat_obs:
