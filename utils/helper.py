@@ -86,6 +86,26 @@ class FSQ(_FSQ):
         return f"FSQ(levels={self.levels})"
 
 
+class SimNorm(nn.Module):
+    """
+    Simplicial normalization.
+    Adapted from https://arxiv.org/abs/2204.00616.
+    """
+
+    def __init__(self, cfg):
+        super().__init__()
+        self.dim = cfg.simnorm_dim
+
+    def forward(self, x):
+        shp = x.shape
+        x = x.view(*shp[:-1], -1, self.dim)
+        x = nn.functional.softmax(x, dim=-1)
+        return x.view(*shp)
+
+    def __repr__(self):
+        return f"SimNorm(dim={self.dim})"
+
+
 class NormedLinear(nn.Linear):
     """
     Linear layer with LayerNorm, Mish activation, and optionally dropout.

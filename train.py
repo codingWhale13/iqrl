@@ -155,6 +155,7 @@ def train(cfg: TrainConfig):
     logging.basicConfig(level=logging.DEBUG)
     logger = logging.getLogger(__name__)
 
+    assert not (cfg.agent.use_fsq and cfg.agent.use_simnorm), "Conflict: FSQ, SimNorm"
     assert cfg.agent.Q_and_rew_loss in ["mse", "soft-ce"], "Unsupported Q_and_rew_loss"
     assert cfg.agent.rl_algo in ["TD3", "SAC"], "Only TD3 and SAC are supported"
     assert cfg.agent.obs_types == ["state"], "Only obs_types=['state'] is supported"

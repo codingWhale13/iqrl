@@ -131,10 +131,14 @@ class iQRLConfig:
     ce_logits_mode: str = "standard"  # "standard", cosine", "mse"
     """How to get propagate the state dist. during training (only for cross-entropy)"""
     unc_prop_mode: str = "sample"  # Literal["sample", "sample-no-grad", "weighted-avg"]
-    """Flag to turn FSQ on/off """
+    """Flag to turn FSQ on/off (cannot choose both SimNorm and this)"""
     use_fsq: bool = True
     """FSQ levels - setting as [8,8] corresponds to a codebook of size 8*8=62=2^8"""
     fsq_levels: List[int] = field(default_factory=lambda: [8, 8])
+    """Flag to turn SimNorm on/off (cannot choose both FSQ and this)"""
+    use_simnorm: bool = False
+    """Dimensionality V of each simplex in SimNorm"""
+    simnorm_dim: int = 8
     """Use offline data to train and use TD3-BC instead of TD3"""
     use_offline_data: bool = "${use_offline_data}"  # Set from TrainConfig
     """States are normalized per-task"""
@@ -308,6 +312,7 @@ class Encoder(nn.Module):
                 mlp_dims=cfg.enc_mlp_dims,
                 out_dim=latent_obs_dim,
                 dropout=cfg.enc_dropout,
+                act_fn=h.SimNorm(cfg) if cfg.use_simnorm else None,
             )
         if cfg.use_action_encoder:
             self._encoder["action"] = h.mlp(
@@ -315,6 +320,7 @@ class Encoder(nn.Module):
                 mlp_dims=cfg.enc_mlp_dims,
                 out_dim=latent_act_dim,
                 dropout=cfg.enc_dropout,
+                act_fn=h.SimNorm(cfg) if cfg.use_simnorm else None,
             )
         if cfg.use_tar_enc:
             self._encoder_tar = copy.deepcopy(self._encoder).requires_grad_(False)
@@ -332,6 +338,7 @@ class Encoder(nn.Module):
             + (ctx_dim if cfg.condition_dynamics else 0),
             mlp_dims=cfg.mlp_dims,
             out_dim=trans_out_dim,
+            act_fn=h.SimNorm(cfg) if cfg.use_simnorm else None,
         )
 
         ##### Init optional reward model #####
