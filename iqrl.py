@@ -117,6 +117,10 @@ class iQRLConfig:
     reward_coef: float = 1.0
     """Consistency coefficient"""
     consistency_coef: float = 1.0
+    """Update the Q-function jointly with the representation (encoder, dynamics, and reward)"""
+    update_Q_with_rep: bool = False
+    """Value coefficient (only relevant when update_Q_with_rep=True)"""
+    value_coef: float = 1.0
     """Use "mse" or "soft-ce" (soft cross-entropy) in critic and reward updates"""
     Q_and_rew_loss: str = "mse"
     """Number of bins and value range (only used if Q_and_rew_loss="soft-ce")"""
@@ -578,107 +582,6 @@ class Encoder(nn.Module):
 
         return zs
 
-    def loss(self, batch: ReplayBufferSamples) -> Tuple[torch.Tensor, dict]:
-        tc_loss = torch.zeros(1).to(self.cfg.device)
-        reward_loss = torch.zeros(1).to(self.cfg.device)
-
-        ##### Create targets #####
-        with torch.no_grad():
-            zs_tar = self.encode_obs(batch.next_observations, tar=True)
-
-        ##### Latent rollout #####
-        zs = self.latent_rollout(batch, grad=True)
-
-        rho = torch.tensor([self.cfg.rho**t for t in range(self.cfg.horizon)]).to(
-            self.cfg.device
-        )
-        dones = batch.dones.to(torch.int)
-
-        ##### (Optional) Reward prediction loss #####
-        if self.cfg.use_rew_loss:
-            # Reward target
-            r_tar = batch.rewards
-
-            # Reward prediction
-            ctx = self.get_context(batch.observations)
-            actions = self.encode_action(batch.actions, ctx=ctx, tar=False)
-            r_pred = self.reward(z=zs["codes"][:-1], a=actions, ctx=ctx).squeeze(-1)
-
-            if self.cfg.Q_and_rew_loss == "mse":
-                assert r_pred.ndim == r_tar.ndim == 2
-                _reward_loss = (r_pred - r_tar) ** 2
-            elif self.cfg.Q_and_rew_loss == "soft-ce":
-                _reward_loss = torch.empty_like(r_tar)
-                for t in range(self.cfg.horizon):
-                    _reward_loss[t] = h.soft_ce(r_pred[t], r_tar[t], self.cfg)
-            _rho_reward_loss = rho * torch.mean((1 - dones) * _reward_loss, -1)
-            reward_loss = torch.mean(_rho_reward_loss)
-
-        ##### Temporal consistency loss #####
-        if self.cfg.use_tc_loss:
-            if self.cfg.consistency_loss == "cross-entropy":
-                """Cross entropy"""
-                if self.cfg.ce_logits_mode in ["cosine", "mse"]:
-                    """If not predicting logits with dynamics NN use alternative method"""
-                    zs_ = zs["codes"][1:].view(
-                        self.cfg.horizon,
-                        self.cfg.batch_size,
-                        int(self.cfg.latent_dim / self.num_channels),
-                        self.num_channels,
-                    )[..., None, :]
-                    codebook = self._fsq.implicit_codebook[None, None, None, ...]
-                    if self.cfg.ce_logits_mode == "cosine":
-                        """Cosine similarity with codebook"""
-                        # TODO use compute_logits like CLIP
-                        zs["logits"][1:] = nn.CosineSimilarity(dim=-1, eps=1e-6)(
-                            zs_, codebook
-                        )
-                    elif self.cfg.ce_logits_mode == "mse":
-                        """Inner product with codebook"""
-                        zs["logits"][1:] = torch.einsum(
-                            "hbdic,hbdCc->hbdC", zs_, codebook
-                        )
-                _tc_loss = torch.vmap(torch.vmap(F.cross_entropy))(
-                    zs["logits"][1:],
-                    zs_tar["indices"].to(torch.long),
-                )
-            elif self.cfg.consistency_loss == "cosine":
-                """Cosine similarity"""
-                _tc_loss = -nn.CosineSimilarity(dim=-1, eps=1e-6)(
-                    zs["codes"][1:], zs_tar["codes"]
-                )
-            elif self.cfg.consistency_loss == "mse":
-                """Mean squared error"""
-                _tc_loss = torch.mean((zs["codes"][1:] - zs_tar["codes"]) ** 2, dim=-1)
-            else:
-                raise NotImplementedError(
-                    f"cfg.consistency_loss should be 'cross-entropy', 'mse', 'cosine', not {self.cfg.consistency_loss}"
-                )
-
-            _rho_tc_loss = rho * torch.mean((1 - dones) * _tc_loss, -1)
-            tc_loss = torch.mean(_rho_tc_loss)
-
-        loss = self.cfg.consistency_coef * tc_loss + self.cfg.reward_coef * reward_loss
-        info = {
-            "tc_loss": tc_loss.item(),
-            "reward_loss": reward_loss.item(),
-            "enc_loss": loss.item(),
-            "z_min": torch.min(zs["codes"]).item(),
-            "z_max": torch.max(zs["codes"]).item(),
-            "z_mean": torch.mean(zs["codes"].to(torch.float)).item(),
-            "z_median": torch.median(zs["codes"]).item(),
-        }
-        if self.cfg.use_rew_loss:
-            info.update(
-                {
-                    "r_min": r_pred.min().item(),
-                    "r_max": r_pred.max().item(),
-                    "r_mean": r_pred.mean().item(),
-                }
-            )
-
-        return loss, info
-
     def metrics(self, batch: ReplayBufferSamples) -> dict:
         z = self.encode_obs(batch.observations[0])
 
@@ -787,7 +690,6 @@ class iQRL(nn.Module):
         ).to(cfg.device)
         if cfg.compile:
             self.encoder = torch.compile(self.encoder, mode="default")
-        self.enc_opt = torch.optim.AdamW(self.encoder.parameters(), lr=cfg.enc_lr)
 
         ##### Init actor network and its target network #####
         self._pi = Actor(
@@ -814,7 +716,12 @@ class iQRL(nn.Module):
 
         ##### Optimizers #####
         self.pi_opt = torch.optim.Adam(self._pi.parameters(), lr=cfg.lr)
-        self.q_opt = torch.optim.Adam(self.Q.parameters(), lr=cfg.lr)
+        if self.cfg.update_Q_with_rep:
+            enc_opt_params = list(self.encoder.parameters()) + list(self.Q.parameters())
+        else:
+            enc_opt_params = self.encoder.parameters()
+            self.q_opt = torch.optim.Adam(self.Q.parameters(), lr=cfg.lr)
+        self.enc_opt = torch.optim.AdamW(enc_opt_params, lr=cfg.enc_lr)
 
         ##### Exploration noise schedule #####
         self._exploration_noise_schedule = h.LinearSchedule(
@@ -856,18 +763,120 @@ class iQRL(nn.Module):
         for i in range(num_updates):
             batch = replay_buffer.sample(rb_idx=rb_idx)
 
-            # Update enc less frequently than actor/critic
-            if i % self.cfg.enc_update_freq == 0:
-                info.update(self.representation_update_step(batch=batch, fake=fake))
+            self.encoder.train()
+            self.Q.train()
+            self.Q_tar.train()
 
-            # Map observations to latent states
+            ##### Calculate representation losses #####
+            tc_loss = torch.zeros(1).to(self.cfg.device)
+            reward_loss = torch.zeros(1).to(self.cfg.device)
+
+            # Create targets
             with torch.no_grad():
-                z = self.encoder.encode_obs(batch.observations, tar=False)
+                zs_tar = self.encoder.encode_obs(batch.next_observations, tar=True)
+
+            # Perform latent rollout
+            zs = self.encoder.latent_rollout(batch, grad=True)
+
+            rho = torch.tensor([self.cfg.rho**t for t in range(self.cfg.horizon)]).to(
+                self.cfg.device
+            )
+            dones = batch.dones.to(torch.int)
+
+            # (Optional) Reward prediction loss
+            if self.cfg.use_rew_loss:
+                # Reward target
+                r_tar = batch.rewards
+
+                # Reward prediction
+                ctx = self.encoder.get_context(batch.observations)
+                actions = self.encoder.encode_action(batch.actions, ctx=ctx, tar=False)
+                r_pred = self.encoder.reward(
+                    z=zs["codes"][:-1], a=actions, ctx=ctx
+                ).squeeze(-1)
+
+                if self.cfg.Q_and_rew_loss == "mse":
+                    assert r_pred.ndim == r_tar.ndim == 2
+                    _reward_loss = (r_pred - r_tar) ** 2
+                elif self.cfg.Q_and_rew_loss == "soft-ce":
+                    _reward_loss = torch.empty_like(r_tar)
+                    for t in range(self.cfg.horizon):
+                        _reward_loss[t] = h.soft_ce(r_pred[t], r_tar[t], self.cfg)
+                _rho_reward_loss = rho * torch.mean((1 - dones) * _reward_loss, -1)
+                reward_loss = torch.mean(_rho_reward_loss)
+
+            # Temporal consistency loss
+            if self.cfg.use_tc_loss:
+                if self.cfg.consistency_loss == "cross-entropy":
+                    """Cross entropy"""
+                    if self.cfg.ce_logits_mode in ["cosine", "mse"]:
+                        """If not predicting logits with dynamics NN use alternative method"""
+                        zs_ = zs["codes"][1:].view(
+                            self.cfg.horizon,
+                            self.cfg.batch_size,
+                            int(self.cfg.latent_dim / self.num_channels),
+                            self.num_channels,
+                        )[..., None, :]
+                        codebook = self._fsq.implicit_codebook[None, None, None, ...]
+                        if self.cfg.ce_logits_mode == "cosine":
+                            """Cosine similarity with codebook"""
+                            # TODO use compute_logits like CLIP
+                            zs["logits"][1:] = nn.CosineSimilarity(dim=-1, eps=1e-6)(
+                                zs_, codebook
+                            )
+                        elif self.cfg.ce_logits_mode == "mse":
+                            """Inner product with codebook"""
+                            zs["logits"][1:] = torch.einsum(
+                                "hbdic,hbdCc->hbdC", zs_, codebook
+                            )
+                    _tc_loss = torch.vmap(torch.vmap(F.cross_entropy))(
+                        zs["logits"][1:],
+                        zs_tar["indices"].to(torch.long),
+                    )
+                elif self.cfg.consistency_loss == "cosine":
+                    """Cosine similarity"""
+                    _tc_loss = -nn.CosineSimilarity(dim=-1, eps=1e-6)(
+                        zs["codes"][1:], zs_tar["codes"]
+                    )
+                elif self.cfg.consistency_loss == "mse":
+                    """Mean squared error"""
+                    _tc_loss = torch.mean(
+                        (zs["codes"][1:] - zs_tar["codes"]) ** 2, dim=-1
+                    )
+                else:
+                    raise NotImplementedError(
+                        f"cfg.consistency_loss should be 'cross-entropy', 'mse', 'cosine', not {self.cfg.consistency_loss}"
+                    )
+
+                _rho_tc_loss = rho * torch.mean((1 - dones) * _tc_loss, -1)
+                tc_loss = torch.mean(_rho_tc_loss)
+
+            rep_info = {
+                "tc_loss": tc_loss.item(),
+                "reward_loss": reward_loss.item(),
+                "z_min": torch.min(zs["codes"]).item(),
+                "z_max": torch.max(zs["codes"]).item(),
+                "z_mean": torch.mean(zs["codes"].to(torch.float)).item(),
+                "z_median": torch.median(zs["codes"]).item(),
+            }
+            if self.cfg.use_rew_loss:
+                rep_info.update(
+                    {
+                        "r_min": r_pred.min().item(),
+                        "r_max": r_pred.max().item(),
+                        "r_mean": r_pred.mean().item(),
+                    }
+                )
+            info.update(rep_info)
+
+            ##### Map observations to latent states #####
+            with torch.no_grad():
                 if self.cfg.critic_next_s == "encoded":
+                    z = self.encoder.encode_obs(batch.observations, tar=False)
                     next_z = self.encoder.encode_obs(batch.next_observations, tar=False)
                 elif self.cfg.critic_next_s == "rollout":
-                    # Do rollout, now *after* representation update; throw away index 0
-                    next_z = self.encoder.latent_rollout(batch, grad=False)[1:]
+                    z = zs[:-1]
+                    next_z = zs[1:]
             batch = batch._replace(z=z, next_z=next_z)
 
             # Avoid edge case when making nstep batch (H, B, whatever) -> (B, whatever)
@@ -875,7 +884,103 @@ class iQRL(nn.Module):
                 raise NotImplementedError("Check N-step batch is made correctly if h=1")
 
             ##### Update critic #####
-            info.update(self.critic_update_step(batch=batch, fake=fake))
+            # Check batch shapes
+            assert batch.rewards.shape[0] == batch.observations.shape[0]
+            assert batch.rewards.shape == (self.cfg.horizon, self.cfg.batch_size)
+            assert batch.z is not None
+
+            # Extract current (z, a) from full batch to make Q-prediction
+            z = batch.z["state"][0]
+            ctx = self.encoder.get_context(batch.observations[0])
+            a = self.encoder.encode_action(batch.actions[0], ctx=ctx)
+            q_values = self.Q(z=z, a=a, ctx=ctx, return_type="all")
+
+            # Make Q-target
+            with torch.no_grad():
+                if self.use_td_lambda:
+                    all_nstep_batch = utils.to_all_nstep(
+                        batch, self.cfg.horizon, self.cfg.gamma
+                    )
+                    next_q_value = self.get_lambda_return(all_nstep_batch)
+                else:
+                    nstep_batch = utils.to_nstep(
+                        batch, nstep=self.cfg.nstep, gamma=self.cfg.gamma
+                    )
+                    next_q_value = self.get_nstep_return(nstep_batch)
+
+            # Calculate Q-loss
+            if self.cfg.Q_and_rew_loss == "mse":
+                q_values = q_values.squeeze(-1)
+                next_q_value = next_q_value.broadcast_to(
+                    q_values.shape
+                )  # For num_critics
+                q_loss = F.mse_loss(q_values, next_q_value)
+            elif self.cfg.Q_and_rew_loss == "soft-ce":
+                q_loss = 0
+                for i in range(self.cfg.num_critics):
+                    q_loss += h.soft_ce(q_values[i], next_q_value, self.cfg).mean()
+                q_loss /= self.cfg.num_critics
+
+                # For logging, change two-hot encoded vectors back to scalars
+                q_values = h.two_hot_inv(q_values, self.cfg)
+
+            critic_info = {
+                "q_loss": q_loss.item(),
+                "q_mean": q_values.mean().item(),
+                "q_min": q_values.min().item(),
+                "q_max": q_values.max().item(),
+                "q_std": q_values.std().item(),
+                "q_targ_mean": next_q_value.mean().item(),
+                "q_targ_min": next_q_value.min().item(),
+                "q_targ_max": next_q_value.max().item(),
+                "q_targ_std": next_q_value.std().item(),
+            }
+            for i in range(self.cfg.num_critics):
+                critic_info.update({f"q{i+1}_values": q_values[i].mean().item()})
+            info.update(critic_info)
+
+            rep_loss = (
+                self.cfg.consistency_coef * tc_loss + self.cfg.reward_coef * reward_loss
+            )
+            if self.cfg.update_Q_with_rep:
+                rep_loss += self.cfg.value_coef * q_loss
+
+            # Get ready for updating the representation components
+            self.enc_opt.zero_grad(set_to_none=True)
+            rep_loss.backward()
+            if self.cfg.grad_clip_norm is not None:
+                enc_params = list(self.encoder.parameters())
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    enc_params, self.cfg.grad_clip_norm, error_if_nonfinite=False
+                )
+                info.update({"grad_norm": float(grad_norm)})
+
+            if not fake:  # Actually optimize encoder, dynamics, (reward,) and Q
+                # Update representation components
+                self.enc_opt.step()
+
+                if not self.cfg.update_Q_with_rep:
+                    # Optimize critic, separately from representation update
+                    self.critic_update_counter += 1
+                    self.q_opt.zero_grad(set_to_none=True)
+                    q_loss.backward()
+                    self.q_opt.step()
+
+                # Update the target networks
+                h.soft_update_params(
+                    self.encoder._encoder,
+                    self.encoder._encoder_tar,
+                    tau=self.cfg.enc_tau,
+                )
+                h.soft_update_params(self.Q, self.Q_tar, tau=self.cfg.tau)
+
+            self.encoder.eval()
+            self.Q.eval()
+            self.Q_tar.eval()
+
+            # Finish logging from representation (and critic) update
+            info["enc_loss"] = rep_loss.item()
+            info["critic_update_counter"] = self.critic_update_counter
 
             ##### Update actor less frequently than critic #####
             if self.critic_update_counter % self.cfg.actor_update_freq == 0:
@@ -900,32 +1005,6 @@ class iQRL(nn.Module):
             if self.cfg.verbose:
                 logger.info("Finished training iQRL")
 
-        return info
-
-    def representation_update_step(
-        self, batch: ReplayBufferSamples, fake: bool = False
-    ) -> dict:
-        self.encoder.train()
-        loss, info = self.encoder.loss(batch=batch)
-        self.enc_opt.zero_grad(set_to_none=True)
-        loss.backward()
-
-        if self.cfg.grad_clip_norm is not None:
-            enc_params = list(self.encoder.parameters())
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                enc_params, self.cfg.grad_clip_norm, error_if_nonfinite=False
-            )
-            info.update({"grad_norm": float(grad_norm)})
-
-        if not fake:  # Actually perform the optimization step
-            self.enc_opt.step()
-
-            # Update the tar network
-            h.soft_update_params(
-                self.encoder._encoder, self.encoder._encoder_tar, tau=self.cfg.enc_tau
-            )
-
-        self.encoder.eval()
         return info
 
     def get_nstep_return(self, nstep_batch: ReplayBufferSamples) -> torch.Tensor:
@@ -984,79 +1063,6 @@ class iQRL(nn.Module):
             return torch.stack(lambda_returns_list, dim=0).median(dim=0).values
         else:
             return self._get_lambda_return(nstep_returns, lam=self.cfg.return_lambda)
-
-    def critic_update_step(
-        self, batch: ReplayBufferSamples, fake: bool = False
-    ) -> dict:
-        self.Q.train()
-        self.Q_tar.train()
-
-        # Check batch shapes
-        assert batch.rewards.shape[0] == batch.observations.shape[0]
-        assert batch.z is not None
-        assert batch.rewards.shape == (self.cfg.horizon, self.cfg.batch_size)
-
-        # Extract current (z, a) from full batch to make Q-prediction
-        z = batch.z["state"][0]
-        ctx = self.encoder.get_context(batch.observations[0])
-        a = self.encoder.encode_action(batch.actions[0], ctx=ctx)
-        q_values = self.Q(z=z, a=a, ctx=ctx, return_type="all")
-
-        # Make Q-target
-        with torch.no_grad():
-            if self.use_td_lambda:
-                all_nstep_batch = utils.to_all_nstep(
-                    batch, self.cfg.horizon, self.cfg.gamma
-                )
-                next_q_value = self.get_lambda_return(all_nstep_batch)
-            else:
-                nstep_batch = utils.to_nstep(
-                    batch, nstep=self.cfg.nstep, gamma=self.cfg.gamma
-                )
-                next_q_value = self.get_nstep_return(nstep_batch)
-
-        # Calculate Q-loss
-        if self.cfg.Q_and_rew_loss == "mse":
-            q_values = q_values.squeeze(-1)
-            next_q_value = next_q_value.broadcast_to(q_values.shape)  # For num_critics
-            q_loss = F.mse_loss(q_values, next_q_value)
-        elif self.cfg.Q_and_rew_loss == "soft-ce":
-            q_loss = 0
-            for i in range(self.cfg.num_critics):
-                q_loss += h.soft_ce(q_values[i], next_q_value, self.cfg).mean()
-            q_loss /= self.cfg.num_critics
-
-            # For logging, change two-hot encoded vectors back to scalars
-            q_values = h.two_hot_inv(q_values, self.cfg)
-
-        if not fake:  # Actually perform the optimization step
-            self.critic_update_counter += 1
-
-            ##### Optimize critic #####
-            self.q_opt.zero_grad(set_to_none=True)
-            q_loss.backward()
-            self.q_opt.step()
-
-            ##### Update the target network #####
-            h.soft_update_params(self.Q, self.Q_tar, tau=self.cfg.tau)
-
-        self.Q.eval()
-        self.Q_tar.eval()
-        info = {
-            "q_loss": q_loss.item(),
-            "q_mean": q_values.mean().item(),
-            "q_min": q_values.min().item(),
-            "q_max": q_values.max().item(),
-            "q_std": q_values.std().item(),
-            "q_targ_mean": next_q_value.mean().item(),
-            "q_targ_min": next_q_value.min().item(),
-            "q_targ_max": next_q_value.max().item(),
-            "q_targ_std": next_q_value.std().item(),
-            "critic_update_counter": self.critic_update_counter,
-        }
-        for i in range(self.cfg.num_critics):
-            info.update({f"q{i+1}_values": q_values[i].mean().item()})
-        return info
 
     def pi_update_step(self, batch: ReplayBufferSamples, fake: bool = False) -> dict:
         self.pi_update_counter += 1
@@ -1206,7 +1212,8 @@ class iQRL(nn.Module):
         metrics = self.encoder.metrics(batch)
 
         metrics.update({"enc": h.calc_mean_opt_moments(self.enc_opt)})
-        metrics.update({"Q": h.calc_mean_opt_moments(self.q_opt)})
+        if not self.cfg.update_Q_with_rep:
+            metrics.update({"Q": h.calc_mean_opt_moments(self.q_opt)})
         metrics.update({"pi": h.calc_mean_opt_moments(self.pi_opt)})
 
         return metrics

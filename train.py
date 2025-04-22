@@ -159,6 +159,7 @@ def train(cfg: TrainConfig):
     assert cfg.agent.Q_and_rew_loss in ["mse", "soft-ce"], "Unsupported Q_and_rew_loss"
     assert cfg.agent.rl_algo in ["TD3", "SAC"], "Only TD3 and SAC are supported"
     assert cfg.agent.obs_types == ["state"], "Only obs_types=['state'] is supported"
+    assert cfg.agent.enc_update_freq == 1, "enc_update_freq!=1 currently not supported"
     assert not cfg.verify_dyn_and_rew or cfg.agent.use_rew_loss, "Can't verify reward"
     if cfg.visualize_body_embeddings or cfg.visualize_task_embeddings:
         assert cfg.agent.context_dim is not None, "No embeddings found to visualize"
