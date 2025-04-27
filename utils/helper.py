@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import copy
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Union
 
 import numpy as np
 import torch
@@ -19,10 +19,20 @@ def soft_update_params(model, model_target, tau: float):
             # params_target.data.copy_(tau * params.data + (1 - tau) * params_target.data)
 
 
+class ContextSequential(nn.Sequential):
+    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]):
+        for module in self:
+            x = module(x, ctx)
+        return x
+
+
 def mlp(
-    in_dim,
-    mlp_dims,
-    out_dim,
+    in_dim: int,
+    mlp_dims: Union[int, list[int]],
+    out_dim: int,
+    ctx_dim: int = 0,
+    condition_layer: Optional[str] = None,  # None or "first" or "all"
+    condition_ln: bool = False,
     act_fn=None,
     dropout=0.0,
     norm_mode: str = "ln",
@@ -32,34 +42,66 @@ def mlp(
     MLP with LayerNorm, Mish activations, and optionally dropout.
 
     Adapted from https://github.com/tdmpc2/tdmpc2-eval/blob/main/helper.py
+
+    If both ctx_dim and condition are specified:
+    - in_dim increases by ctx_dim, if condition in ["first", "all"]
+    - all mlp_dims increase by ctx_dim, if condition == "all"
     """
     if isinstance(mlp_dims, int):
         mlp_dims = [mlp_dims]
 
     dims = [int(in_dim)] + mlp_dims + [int(out_dim)]
     mlp = nn.ModuleList()
-    for i in range(len(dims) - 2):
+    mlp.append(
+        NormedLinear(
+            dims[0],
+            dims[1],
+            ctx_dim=ctx_dim if condition_layer in ["first", "all"] else None,
+            condition_ln=condition_ln,
+            dropout=dropout,
+            norm_mode=norm_mode,
+            norm_after_act=norm_after_act,
+        )
+    )
+
+    add_to_next_in_dim = 0  # Conditioning LayerNorm changes outgoing dims of layers
+    if condition_layer in ["first", "all"] and condition_ln:
+        add_to_next_in_dim = ctx_dim
+
+    for i in range(1, len(dims) - 2):
         mlp.append(
             NormedLinear(
-                dims[i],
+                dims[i] + add_to_next_in_dim,
                 dims[i + 1],
-                dropout=dropout * (i == 0),
+                ctx_dim=ctx_dim if condition_layer == "all" else None,
+                condition_ln=condition_ln,
                 norm_mode=norm_mode,
                 norm_after_act=norm_after_act,
             )
         )
+        if condition_layer == "all" and condition_ln:
+            add_to_next_in_dim = ctx_dim
+        else:
+            add_to_next_in_dim = 0
+
     mlp.append(
         NormedLinear(
-            dims[-2],
+            dims[-2] + add_to_next_in_dim,
             dims[-1],
+            ctx_dim=ctx_dim if condition_layer == "all" else None,
+            condition_ln=condition_ln,
             act=act_fn,
             norm_mode=norm_mode,
             norm_after_act=norm_after_act,
         )
         if act_fn
-        else nn.Linear(dims[-2], dims[-1])
+        else ContextLinear(
+            in_features=dims[-2] + add_to_next_in_dim,
+            out_features=dims[-1],
+            ctx_dim=ctx_dim if condition_layer == "all" else None,
+        )
     )
-    return nn.Sequential(*mlp)
+    return ContextSequential(*mlp)
 
 
 class FSQ(_FSQ):
@@ -106,30 +148,64 @@ class SimNorm(nn.Module):
         return f"SimNorm(dim={self.dim})"
 
 
-class NormedLinear(nn.Linear):
+class ContextLinear(nn.Linear):
+    """
+    Linear layer which can use context as a second input, if desired.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        ctx_dim: Optional[int],
+        *args,
+        **kwargs,
+    ):
+        self.use_ctx = ctx_dim is not None
+        if self.use_ctx:
+            in_features += ctx_dim
+        super().__init__(in_features, out_features, *args, **kwargs)
+
+    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]):
+        if self.use_ctx:
+            x = torch.cat(ctx + [x], -1)
+        return super().forward(x)
+
+
+class NormedLinear(ContextLinear):
     """
     Linear layer with LayerNorm, Mish activation, and optionally dropout.
 
     Adapted from https://github.com/tdmpc2/tdmpc2-eval/blob/main/helper.py
+
+    Optionally, conditioning on context can be used. If ctx_dim is not None:
+    - The context will be concatenated to the input of the linear layer and
+    - The context will be concatenated to the input of the LayerNorm layer.
     """
 
     def __init__(
         self,
         *args,
+        ctx_dim: Optional[int] = None,
+        condition_ln: bool = False,
         dropout=0.0,
         act=nn.Mish(inplace=True),
         norm_mode: Optional[str] = "ln",  # "ln" or "bn" or "brn" or None
         norm_after_act: bool = True,
         **kwargs,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, ctx_dim=ctx_dim, **kwargs)
         if norm_mode == "bn":
+            assert ctx_dim is None, "Not implemented"
             self.norm = nn.BatchNorm1d(self.out_features)
         elif norm_mode == "brn":
+            assert ctx_dim is None, "Not implemented"
             self.norm = BatchRenorm1d(self.out_features)
         elif norm_mode == "ln":
-            self.norm = nn.LayerNorm(self.out_features)
-        elif norm_mode == None:
+            ctx_dim_ln = ctx_dim if condition_ln else None
+            self.norm = ContextLayerNorm(self.out_features, ctx_dim=ctx_dim_ln)
+        elif norm_mode is None:
+            assert ctx_dim is None, "Not implemented"
             self.norm = lambda x: x
         else:
             raise NotImplementedError(
@@ -139,22 +215,42 @@ class NormedLinear(nn.Linear):
         self.norm_after_act = norm_after_act
         self.act = act
         self.dropout = nn.Dropout(dropout, inplace=True) if dropout else None
+        self.ctx_dim = ctx_dim
 
-    def forward(self, x):
-        x = super().forward(x)
+    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]):
+        x = super().forward(x, ctx)
         if self.dropout:
             x = self.dropout(x)
         if self.norm_after_act:
-            return self.norm(self.act(x))
+            return self.norm(self.act(x), ctx)
         else:
-            return self.act(self.norm(x))
+            return self.act(self.norm(x, ctx))
 
     def __repr__(self):
         repr_dropout = f", dropout={self.dropout.p}" if self.dropout else ""
         return f"NormedLinear(in_features={self.in_features}, \
         out_features={self.out_features}, \
+        ctx_dim={self.ctx_dim}, \
         bias={self.bias is not None}{repr_dropout}, \
         act={self.act.__class__.__name__})"
+
+
+class ContextLayerNorm(nn.LayerNorm):
+    """
+    LayerNorm layer which can use context as a second input, if desired.
+    """
+
+    def __init__(self, normalized_shape: int, ctx_dim: Optional[int], *args, **kwargs):
+        self.use_ctx = ctx_dim is not None
+        if self.use_ctx:
+            normalized_shape += ctx_dim
+        super().__init__(normalized_shape=normalized_shape, *args, **kwargs)
+
+    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]):
+        if self.use_ctx:
+            x = torch.cat(ctx + [x], -1)
+        x = super().forward(x)
+        return x
 
 
 class Ensemble(nn.Module):
@@ -171,16 +267,23 @@ class Ensemble(nn.Module):
         base_model = copy.deepcopy(modules[0])
         base_model = base_model.to("meta")
 
-        def fmodel(params, buffers, x):
-            return functional_call(base_model, (params, buffers), (x,))
+        def fmodel(params, buffers, x1, x2):
+            return functional_call(base_model, (params, buffers), (x1, x2))
+
+        # Build in_dims matching the pytree structure
+        params_in_dims = {k: 0 for k in self.params_dict.keys()}
+        buffers_in_dims = {k: 0 for k in self._buffers.keys()}
 
         self.vmap = torch.vmap(
-            fmodel, in_dims=(0, 0, None), randomness="different", **kwargs
+            fmodel,
+            in_dims=(params_in_dims, buffers_in_dims, None, None),
+            randomness="different",
+            **kwargs,
         )
         self._repr = str(modules)
 
-    def forward(self, *args, **kwargs):
-        return self.vmap(self._get_params_dict(), self._buffers, *args, **kwargs)
+    def forward(self, x, ctx):  # Supply modules with context (they may or may not use)
+        return self.vmap(self._get_params_dict(), self._buffers, x, ctx)
 
     def _get_params_dict(self):
         params_dict = {}

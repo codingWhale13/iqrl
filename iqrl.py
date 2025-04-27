@@ -39,6 +39,10 @@ class iQRLConfig:
     condition_actor: bool = True
     condition_critic: bool = True
     condition_reward: bool = True
+    """When conditioning a component, concatenate context to which layer's input?"""
+    condition_layer: str = "first"  # or "all"
+    """When conditioning a layer, also concatenate context to LayerNorm input?"""
+    condition_ln: bool = False
     """MLP dims for actor/critic/dynamics"""
     mlp_dims: List[int] = field(default_factory=lambda: [512, 512])
     """Learning rate for actor/critic"""
@@ -181,7 +185,8 @@ class Actor(nn.Module):
     def __init__(
         self,
         cfg: iQRLConfig,
-        in_dim: int,
+        obs_dim: int,
+        ctx_dim: Optional[int],
         act_dim: int,
         action_scale: float,
         action_bias: float,
@@ -190,22 +195,26 @@ class Actor(nn.Module):
         self.cfg = cfg
         self.action_scale = action_scale
         self.action_bias = action_bias
-
-        out_dim = act_dim if cfg.rl_algo == "TD3" else act_dim * 2  # SAC -> 2 heads
-        self.mlp = h.mlp(in_dim, self.cfg.mlp_dims, out_dim)
+        self.mlp = h.mlp(
+            in_dim=obs_dim,
+            mlp_dims=cfg.mlp_dims,
+            out_dim=act_dim if cfg.rl_algo == "TD3" else act_dim * 2,  # SAC -> 2 heads
+            ctx_dim=ctx_dim,
+            condition_layer=cfg.condition_layer if cfg.condition_actor else None,
+            condition_ln=cfg.condition_ln,
+        )
 
     def forward(
         self, z: torch.Tensor, ctx: list[torch.Tensor]
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
-        x = torch.cat(ctx + [z], -1) if self.cfg.condition_actor else z
         if self.cfg.rl_algo == "TD3":
-            a = self.mlp(x)
+            a = self.mlp(z, ctx)
             a = torch.tanh(a)
             a = a * self.action_scale + self.action_bias
 
             return a, None, None
         else:  # SAC
-            mean, log_std = self.mlp(x).chunk(2, dim=-1)
+            mean, log_std = self.mlp(z, ctx).chunk(2, dim=-1)
             log_std = torch.tanh(log_std)
             log_std = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (log_std + 1)
             std = log_std.exp()
@@ -225,7 +234,7 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, cfg: iQRLConfig, in_dim: int):
+    def __init__(self, cfg: iQRLConfig, in_dim: int, ctx_dim: Optional[int]):
         super().__init__()
         self.cfg = cfg
 
@@ -234,6 +243,9 @@ class Critic(nn.Module):
                 in_dim=in_dim,
                 mlp_dims=cfg.mlp_dims,
                 out_dim=1 if self.cfg.Q_and_rew_loss == "mse" else cfg.num_bins,
+                ctx_dim=ctx_dim,
+                condition_layer=cfg.condition_layer if cfg.condition_critic else None,
+                condition_ln=cfg.condition_ln,
                 dropout=cfg.q_dropout,
             ).to(cfg.device)
             for _ in range(cfg.num_critics)
@@ -250,8 +262,8 @@ class Critic(nn.Module):
         ctx: list[torch.Tensor],
         return_type: str = "all",
     ):
-        x = torch.cat(ctx + [z, a] if self.cfg.condition_critic else [z, a], -1)
-        qs = self.qs(x)
+        za = torch.cat([z, a], -1)
+        qs = self.qs(za, ctx)
         if return_type == "all":
             return qs
 
@@ -312,17 +324,23 @@ class Encoder(nn.Module):
         self._encoder = nn.ModuleDict()
         if "state" in cfg.obs_types and cfg.use_obs_encoder:
             self._encoder["state"] = h.mlp(
-                in_dim=obs_dim + (ctx_dim if cfg.condition_encoders else 0),
+                in_dim=obs_dim,
                 mlp_dims=cfg.enc_mlp_dims,
                 out_dim=latent_obs_dim,
+                ctx_dim=ctx_dim,
+                condition_layer=cfg.condition_layer if cfg.condition_encoders else None,
+                condition_ln=cfg.condition_ln,
                 dropout=cfg.enc_dropout,
                 act_fn=h.SimNorm(cfg) if cfg.use_simnorm else None,
             )
         if cfg.use_action_encoder:
             self._encoder["action"] = h.mlp(
-                in_dim=act_dim + (ctx_dim if cfg.condition_encoders else 0),
+                in_dim=act_dim,
                 mlp_dims=cfg.enc_mlp_dims,
                 out_dim=latent_act_dim,
+                ctx_dim=ctx_dim,
+                condition_layer=cfg.condition_layer if cfg.condition_encoders else None,
+                condition_ln=cfg.condition_ln,
                 dropout=cfg.enc_dropout,
                 act_fn=h.SimNorm(cfg) if cfg.use_simnorm else None,
             )
@@ -337,22 +355,24 @@ class Encoder(nn.Module):
                 assert cfg.use_fsq
                 trans_out_dim = int(self.org_latent_dim * self._fsq.codebook_size)
         self._trans = h.mlp(
-            in_dim=latent_obs_dim
-            + latent_act_dim
-            + (ctx_dim if cfg.condition_dynamics else 0),
+            in_dim=latent_obs_dim + latent_act_dim,
             mlp_dims=cfg.mlp_dims,
             out_dim=trans_out_dim,
+            ctx_dim=ctx_dim,
+            condition_layer=cfg.condition_layer if cfg.condition_dynamics else None,
+            condition_ln=cfg.condition_ln,
             act_fn=h.SimNorm(cfg) if cfg.use_simnorm else None,
         )
 
         ##### Init optional reward model #####
         if cfg.use_rew_loss:
             self._reward = h.mlp(
-                in_dim=latent_obs_dim
-                + latent_act_dim
-                + (ctx_dim if cfg.condition_reward else 0),
+                in_dim=latent_obs_dim + latent_act_dim,
                 mlp_dims=cfg.mlp_dims,
                 out_dim=1 if cfg.Q_and_rew_loss == "mse" else cfg.num_bins,
+                ctx_dim=ctx_dim,
+                condition_layer=cfg.condition_layer if cfg.condition_reward else None,
+                condition_ln=cfg.condition_ln,
             )
 
     def get_context(self, obs: TensorDictBase) -> list[torch.Tensor]:
@@ -397,13 +417,11 @@ class Encoder(nn.Module):
         p1d = (0, self.obs_dim - obs_tensor.shape[-1])  # Don't assume inherent max obs
         obs_padded = F.pad(obs_tensor, p1d, "constant", 0.0).to(self.cfg.device)
 
-        if self.cfg.condition_encoders:
-            obs_padded = torch.cat(self.get_context(obs) + [obs_padded], dim=-1)
-
+        ctx = self.get_context(obs)
         if tar:
-            z = self._encoder_tar["state"](obs_padded)
+            z = self._encoder_tar["state"](obs_padded, ctx)
         else:
-            z = self._encoder["state"](obs_padded)
+            z = self._encoder["state"](obs_padded, ctx)
         td = TensorDict({"state": z}, batch_size=obs.batch_size)
 
         if self.cfg.use_fsq:
@@ -420,13 +438,10 @@ class Encoder(nn.Module):
             return action  # Identity mapping
 
         # NOTE: No padding required because action comes from padded replay buffer
-        if self.cfg.condition_encoders:
-            action = torch.cat(ctx + [action], dim=-1)
-
         if tar:
-            za = self._encoder_tar["action"](action)
+            za = self._encoder_tar["action"](action, ctx)
         else:
-            za = self._encoder["action"](action)
+            za = self._encoder["action"](action, ctx)
 
         return za  # NOTE: actions are not being quantized currently
 
@@ -437,7 +452,7 @@ class Encoder(nn.Module):
         ctx: list[torch.Tensor],
         unc_prop_mode: Optional[str] = None,
     ):
-        za = torch.concat((ctx + [z, a] if self.cfg.condition_dynamics else [z, a]), -1)
+        za = torch.concat([z, a], -1)
 
         if (
             self.cfg.consistency_loss == "cross-entropy"
@@ -445,7 +460,7 @@ class Encoder(nn.Module):
         ):
             """Make predictions with dynamics as NN classifier"""
             # Returns logits for each class
-            logits = self._trans(za)
+            logits = self._trans(za, ctx)
             logits = logits.reshape(-1, self.org_latent_dim, self._fsq.codebook_size)
 
             if unc_prop_mode is None:
@@ -488,7 +503,7 @@ class Encoder(nn.Module):
                 raise NotImplementedError
         else:
             """Make predictions with dynamics regression model"""
-            delta_z = self._trans(za)
+            delta_z = self._trans(za, ctx)
             next_z = z + delta_z if self.cfg.use_delta else delta_z
             if self.cfg.use_fsq:
                 next_z = self.quantize(next_z)["codes"]
@@ -510,8 +525,8 @@ class Encoder(nn.Module):
     def reward(
         self, z: torch.Tensor, a: torch.Tensor, ctx: list[torch.Tensor]
     ) -> torch.Tensor:
-        za = torch.cat(ctx + [z, a] if self.cfg.condition_reward else [z, a], -1)
-        r = self._reward(za)
+        za = torch.cat([z, a], dim=-1)
+        r = self._reward(za, ctx)
         return r
 
     def quantize(self, z: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -694,7 +709,8 @@ class iQRL(nn.Module):
         ##### Init actor network and its target network #####
         self._pi = Actor(
             cfg,
-            in_dim=latent_obs_dim + (ctx_dim if cfg.condition_actor else 0),
+            obs_dim=latent_obs_dim,
+            ctx_dim=ctx_dim,
             act_dim=act_dim,
             action_scale=(act_spec_hi - act_spec_lo).to(cfg.device) / 2.0,
             action_bias=(act_spec_hi + act_spec_lo).to(cfg.device) / 2.0,
@@ -704,12 +720,9 @@ class iQRL(nn.Module):
         self._pi_tar = torch.compile(pi_tar, mode="default") if cfg.compile else pi_tar
 
         ##### Init critics and their target networks #####
-        Q = Critic(
-            cfg,
-            in_dim=latent_obs_dim
-            + latent_act_dim
-            + (ctx_dim if cfg.condition_critic else 0),
-        ).to(cfg.device)
+        Q = Critic(cfg, in_dim=latent_obs_dim + latent_act_dim, ctx_dim=ctx_dim).to(
+            cfg.device
+        )
         self.Q = torch.compile(Q, mode="default") if cfg.compile else Q
         Q_tar = copy.deepcopy(self.Q).requires_grad_(False)
         self.Q_tar = torch.compile(Q_tar, mode="default") if cfg.compile else Q_tar
