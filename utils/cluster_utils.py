@@ -11,7 +11,7 @@ class SlurmConfig(SlurmQueueConf):
     https://github.com/facebookresearch/hydra/blob/main/plugins/hydra_submitit_launcher/hydra_plugins/hydra_submitit_launcher/config.py
     """
 
-    timeout_min: int = 5760  # 4 days = 96 hours = 5760 minutes
+    timeout_min: int = 7200  # 6 days = 120 hours = 7200 minutes
     mem_gb: int = 32
     cpus_per_task: int = 5
     gres: str = "gpu:1"
