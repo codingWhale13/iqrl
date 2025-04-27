@@ -1,0 +1,8 @@
+# @package _global_
+defaults:
+  - hard
+  - _self_
+
+envs:
+  - ["humanoid", "stand"]
+  - ["dog", "stand"]

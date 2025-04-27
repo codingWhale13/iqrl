@@ -1,0 +1,11 @@
+# @package _global_
+defaults:
+  - _self_
+  - medium
+
+envs:
+  - ["cartpole", "balance"]
+  - ["cup", "catch"]
+  - ["walker", "stand"]
+  - ["walker", "walk"]
+  - ["dog", "walk"]

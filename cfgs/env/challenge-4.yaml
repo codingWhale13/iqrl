@@ -1,0 +1,10 @@
+# @package _global_
+defaults:
+  - _self_
+  - hard
+
+envs:
+  - ["finger", "spin"]  # easy
+  - ["finger", "turn_easy"]  # medium
+  - ["cheetah", "run"]  # medium
+  - ["dog", "run"]  # hard

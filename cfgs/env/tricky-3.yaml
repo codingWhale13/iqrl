@@ -1,0 +1,9 @@
+# @package _global_
+defaults:
+  - medium  # may be "easy" by themselves, but tricky together
+  - _self_
+
+envs:
+  - ["finger", "spin"]
+  - ["hopper", "stand"]
+  - ["pendulum", "swingup"]
