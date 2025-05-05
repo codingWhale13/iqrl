@@ -284,8 +284,8 @@ def train(cfg: TrainConfig):
     ###### Init agent ######
     ids_to_dims = {}  # (body ID, task ID) -> (obs dim, action dim), all integers
     for i in range(env_count):
-        body_id = np.argmax(body_str_to_id[cfg.envs[i][0]]).item()
-        task_id = np.argmax(task_str_to_id[cfg.envs[i][1]]).item()
+        body_id = body_str_to_id[cfg.envs[i][0]]
+        task_id = task_str_to_id[cfg.envs[i][1]]
         o = np.array(obs_specs[i]["state"].shape).prod().item()
         a = np.array(act_specs[i].shape).prod().item()
         ids_to_dims[(body_id, task_id)] = (o, a)
