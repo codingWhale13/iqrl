@@ -744,8 +744,10 @@ def train(cfg: TrainConfig):
             train_metrics["update_time"] = time.time() - update_start_time
             train_metrics["env_step"] = sum(steps) * cfg.action_repeat
             writer.log_scalar(name="train/", value=train_metrics)
-            torch.save({"model": agent.state_dict()}, "./checkpoint")
             if episode_idx % cfg.eval_every_episodes == 0:
+                if cfg.verbose:
+                    logger.info(f"Saving model checkpoint for episode {episode_idx}")
+                torch.save({"model": agent.state_dict()}, "./checkpoint")
                 evaluate(
                     cfg,
                     steps=steps,
@@ -756,7 +758,11 @@ def train(cfg: TrainConfig):
         # Release some GPU memory (if possible)
         torch.cuda.empty_cache()
 
-    # Evaluate the final agent
+    # Save final checkpoint and evaluate the final agent
+    if not cfg.eval_only:
+        if cfg.verbose:
+            logger.info("Saving final model checkpoint")
+        torch.save({"model": agent.state_dict()}, "./checkpoint")
     _ = evaluate(cfg, steps=steps, episode_idx=cfg.num_episodes, start_time=start_time)
 
     env.close()
