@@ -63,6 +63,8 @@ class iQRLConfig:
     q_sample_size: int = 2
     """In critic update, next_s can be "encoded" (as in iQRL) or "rollout\""""
     critic_next_s: str = "encoded"
+    """Use embodiment context? (task context is always used)"""
+    use_embodiment_context: bool = True
     """Body and task embedding size; use None for one-hot encoding instead"""
     context_dim: Optional[int] = None  # Sensible default for embedding size: 96
     """What observation types to use? ["state"] or ["pixels"] or ["state", "pixels"]"""
@@ -307,12 +309,13 @@ class Encoder(nn.Module):
         self.n_body = n_body
         self.n_task = n_task
         if cfg.context_dim is not None:
-            self._body_emb = nn.Embedding(
-                self.n_body, cfg.context_dim, max_norm=1, device=self.cfg.device
-            )
             self._task_emb = nn.Embedding(
                 self.n_task, cfg.context_dim, max_norm=1, device=self.cfg.device
             )
+            if cfg.use_embodiment_context:
+                self._body_emb = nn.Embedding(
+                    self.n_body, cfg.context_dim, max_norm=1, device=self.cfg.device
+                )
 
         ##### Configure FSQ stuff #####
         self.org_latent_dim = org_latent_dim
@@ -391,7 +394,7 @@ class Encoder(nn.Module):
 
         if self.cfg.context_dim is None:
             # Use one-hot encoding
-            if body_id is not None:
+            if body_id is not None and self.cfg.use_embodiment_context:
                 body = nn.functional.one_hot(body_id, self.n_body).to(self.cfg.device)
                 context.append(body)
             if task_id is not None:
@@ -399,7 +402,7 @@ class Encoder(nn.Module):
                 context.append(task)
         else:
             # Use embedding
-            if body_id is not None:
+            if body_id is not None and self.cfg.use_embodiment_context:
                 context.append(self._body_emb(body_id).to(self.cfg.device))
             if task_id is not None:
                 context.append(self._task_emb(task_id).to(self.cfg.device))
@@ -640,6 +643,8 @@ class iQRL(nn.Module):
         self.cfg = cfg
         self.ids_to_dims = ids_to_dims
         self.use_td_lambda = self.cfg.nstep == -1
+        self.n_body = n_body
+        self.n_task = n_task
 
         ##### Assert observation types (1d low and high; broadcasted later) #####
         assert len(obs_specs) == len(act_specs)
@@ -676,18 +681,22 @@ class iQRL(nn.Module):
         self.cfg.bin_size = (cfg.vmax - cfg.vmin) / (cfg.num_bins - 1)
 
         ##### Calculate max dims of observations, actions and body&task IDs #####
-        obs_dim = max(np.prod(obs["state"].shape).item() for obs in obs_specs)
+        self.obs_dim = max(np.prod(obs["state"].shape).item() for obs in obs_specs)
         self.act_dims = [np.prod(act_spec.shape).item() for act_spec in act_specs]
-        act_dim = max(self.act_dims)
-        keys = [c for c in ["body_id", "task_id"] if c in obs_specs[0].keys()]
+        self.act_dim = max(self.act_dims)
+
+        keys = ["task_id"] if "task_id" in obs_specs[0].keys() else []
+        if "body_id" in obs_specs[0].keys() and cfg.use_embodiment_context:
+            keys.append("body_id")
+
         if cfg.context_dim is None:  # IDs will be one-hot encoded
             ctx_dim = n_body * ("body_id" in keys) + n_task * ("task_id" in keys)
         else:  # IDs will be embedded
             ctx_dim = cfg.context_dim * len(keys)
 
         ##### Calculate dimensions of (optional) latent spaces #####
-        latent_obs_dim = cfg.latent_dim if cfg.use_obs_encoder else obs_dim
-        latent_act_dim = act_dim
+        latent_obs_dim = cfg.latent_dim if cfg.use_obs_encoder else self.obs_dim
+        latent_act_dim = self.act_dim
         if cfg.use_action_encoder:
             latent_act_dim *= cfg.latent_action_dim_factor
 
@@ -711,7 +720,7 @@ class iQRL(nn.Module):
             cfg,
             obs_dim=latent_obs_dim,
             ctx_dim=ctx_dim,
-            act_dim=act_dim,
+            act_dim=self.act_dim,
             action_scale=(act_spec_hi - act_spec_lo).to(cfg.device) / 2.0,
             action_bias=(act_spec_hi + act_spec_lo).to(cfg.device) / 2.0,
         ).to(cfg.device)

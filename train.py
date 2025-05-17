@@ -50,6 +50,7 @@ class TrainConfig:
     num_episodes: int = 3000  # Number of training episodes per environment
     random_episodes: int = 10  # Number of random episodes at start
     action_repeat: int = 2
+    use_naive_keys: bool = False  # Set to True to verify that embeddings are learned
     buffer_size: int = 2_000_000  # Replay buffer size, per task
     prefetch: int = 5
     seed: int = 42
@@ -192,12 +193,23 @@ def train(cfg: TrainConfig):
     )
 
     ###### Setup environment for training/evaluation/video recording ######
+    body_names_org = [body_name for body_name, _ in cfg.envs]  # Keep these for make_env
+    task_names_org = [task_name for _, task_name in cfg.envs]  # Keep these for make_env
     body_names = [body_name for body_name, _ in cfg.envs]
     task_names = [task_name for _, task_name in cfg.envs]
-    body_str_to_id = h.seq_to_id(body_names)
-    task_str_to_id = h.seq_to_id(task_names)
+    if cfg.use_naive_keys:
+        body_names, body_str_to_id = h.seq_to_id_naive(body_names)
+        task_names, task_str_to_id = h.seq_to_id_naive(task_names)
+    else:
+        body_str_to_id = h.seq_to_id(body_names)
+        task_str_to_id = h.seq_to_id(task_names)
     n_body = len(set(body_names))
     n_task = len(set(task_names))
+    print(f"{n_body=}", f"{n_task=}")
+    print(f"{body_names=}")
+    print(f"{task_names=}")
+    print(f"{body_str_to_id=}")
+    print(f"{task_str_to_id=}")
 
     common_kwargs_for_make_env = {
         "seed": cfg.seed,
@@ -212,14 +224,14 @@ def train(cfg: TrainConfig):
     create_fn = [
         partial(
             make_env,
-            env_name=body_name,
-            task_name=task_name,
-            body_id=torch.tensor([body_str_to_id[body_name]], device=cfg.device),
-            task_id=torch.tensor([task_str_to_id[task_name]], device=cfg.device),
+            env_name=body_names_org[i],
+            task_name=task_names_org[i],
+            body_id=torch.tensor([body_str_to_id[body_names[i]]], device=cfg.device),
+            task_id=torch.tensor([task_str_to_id[task_names[i]]], device=cfg.device),
             record_video=False,  # No need, video_envs will record videos
             **common_kwargs_for_make_env,
         )
-        for body_name, task_name in cfg.envs
+        for i in range(env_count)
     ]
 
     obs_specs = []
@@ -251,10 +263,14 @@ def train(cfg: TrainConfig):
     if cfg.capture_eval_video:
         video_envs = [
             make_env(
-                env_name=body_name,
-                task_name=task_name,
-                body_id=torch.tensor([body_str_to_id[body_name]], device=cfg.device),
-                task_id=torch.tensor([task_str_to_id[task_name]], device=cfg.device),
+                env_name=body_names_org[i],
+                task_name=task_names_org[i],
+                body_id=torch.tensor(
+                    [body_str_to_id[body_names[i]]], device=cfg.device
+                ),
+                task_id=torch.tensor(
+                    [task_str_to_id[task_names[i]]], device=cfg.device
+                ),
                 record_video=cfg.capture_eval_video,
                 use_offline_data=False,
                 obs_dim=od[i],
@@ -262,7 +278,7 @@ def train(cfg: TrainConfig):
                 max_act_dim=max(ad),
                 **common_kwargs_for_make_env,
             )
-            for i, (body_name, task_name) in enumerate(cfg.envs)
+            for i in range(env_count)
         ]
 
     ###### Prepare replay buffer ######
@@ -284,8 +300,8 @@ def train(cfg: TrainConfig):
     ###### Init agent ######
     ids_to_dims = {}  # (body ID, task ID) -> (obs dim, action dim), all integers
     for i in range(env_count):
-        body_id = body_str_to_id[cfg.envs[i][0]]
-        task_id = task_str_to_id[cfg.envs[i][1]]
+        body_id = body_str_to_id[body_names[i]]
+        task_id = task_str_to_id[task_names[i]]
         o = np.array(obs_specs[i]["state"].shape).prod().item()
         a = np.array(act_specs[i].shape).prod().item()
         ids_to_dims[(body_id, task_id)] = (o, a)

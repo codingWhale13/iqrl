@@ -322,7 +322,10 @@ class LinearSchedule:
         self.end = end
         self.num_steps = num_steps
         self.step_idx = 0
-        self.values = np.linspace(start, end, num_steps)
+        if num_steps == 0:
+            self.values = [end, end]
+        else:
+            self.values = np.linspace(start, end, num_steps)
 
     def __call__(self):
         return self.values[self.step_idx]
@@ -372,6 +375,19 @@ def seq_to_id(keys: Sequence[str]) -> dict[str, int]:
             str_to_id[key] = next_id
             next_id += 1
     return str_to_id
+
+
+def seq_to_id_naive(keys: Sequence[str]) -> tuple[list, dict[str, int]]:
+    """Returns mapping from string identifiers to IDs.
+    The twist: Keeps on handing out new ideas, even to already-seen keys
+    The order of the input sequence determines the ordering of the IDs."""
+    str_to_id = {}
+    keys_modified = []
+    for next_id, key in enumerate(keys):
+        key_naive = f"{key} ({next_id})"  # human-readable + (what the agent sees)
+        str_to_id[key_naive] = next_id
+        keys_modified.append(key_naive)
+    return keys_modified, str_to_id
 
 
 def symlog(x):
