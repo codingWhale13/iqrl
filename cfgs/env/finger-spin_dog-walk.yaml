@@ -1,0 +1,8 @@
+# @package _global_
+defaults:
+  - medium  # Same as tricky-3
+  - _self_
+
+envs:
+  - ["finger", "spin"]
+  - ["dog", "walk"]

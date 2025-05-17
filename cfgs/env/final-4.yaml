@@ -1,0 +1,10 @@
+# @package _global_
+defaults:
+  - _self_
+  - medium
+
+envs:
+  - ["cartpole", "balance"]
+  - ["cup", "catch"]
+  - ["finger", "spin"]
+  - ["pendulum", "swingup"]
