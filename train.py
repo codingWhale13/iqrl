@@ -84,7 +84,9 @@ class TrainConfig:
     # Override the Hydra config to get better dir structure with W&B
     hydra: Any = field(
         default_factory=lambda: {
-            "run": {"dir": "output/hydra/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}"},
+            "run": {
+                "dir": "/scratch/work/kielen1/experiments/iqrl/output/hydra/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}"
+            },
             "verbose": False,
             "job": {"chdir": True},
             "sweep": {"dir": "${hydra.run.dir}", "subdir": "${hydra.job.num}"},
