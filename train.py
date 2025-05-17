@@ -165,6 +165,11 @@ def train(cfg: TrainConfig):
     assert not cfg.verify_dyn_and_rew or cfg.agent.use_rew_loss, "Can't verify reward"
     if cfg.visualize_body_embeddings or cfg.visualize_task_embeddings:
         assert cfg.agent.context_dim is not None, "No embeddings found to visualize"
+    if not cfg.agent.use_representation_learning:
+        logger.info("No representation learning => encoders and FSQ will not be used")
+        cfg.agent.use_obs_encoder = False
+        cfg.agent.use_action_encoder = False
+        cfg.agent.use_fsq = False
 
     ###### Fix seed for reproducibility ######
     random.seed(cfg.seed)
@@ -520,15 +525,13 @@ def train(cfg: TrainConfig):
                 # t-SNE expects (n_samples, n_features) -> (env_count*n, latent_dim)
                 with torch.no_grad():
                     if cfg.visualize_latent_states:
-                        latent_states = agent.encoder.encode_obs(data["observation"])[
-                            "state"
-                        ]
+                        latent_states = agent.encode_obs(data["observation"])["state"]
                         latent_states = latent_states.flatten(0, 1).cpu().numpy()
                         log_tsne(latent_states, "Env", "Latent states")
                     if cfg.visualize_latent_actions:
-                        latent_actions = agent.encoder.encode_action(
+                        latent_actions = agent.encode_action(
                             action=data["action"].to(cfg.device),
-                            ctx=agent.encoder.get_context(data["observation"]),
+                            ctx=agent.get_context(data["observation"]),
                         )
                         latent_actions = latent_actions.flatten(0, 1).cpu().numpy()
                         log_tsne(latent_actions, "Env", "Latent actions")
@@ -536,7 +539,7 @@ def train(cfg: TrainConfig):
                         task_ids = torch.arange(n_task).long().to(cfg.device)
                         task_emb = agent.encoder._task_emb(task_ids).cpu().numpy()
                         log_tsne(task_emb, "Task", "Task embeddings")
-                    if cfg.visualize_task_embeddings:
+                    if cfg.visualize_body_embeddings:
                         body_ids = torch.arange(n_body).long().to(cfg.device)
                         body_emb = agent.encoder._body_emb(body_ids).cpu().numpy()
                         log_tsne(body_emb, "Embodiment", "Body embeddings")
@@ -559,10 +562,10 @@ def train(cfg: TrainConfig):
                     actions = torch.nested.to_padded_tensor(actions, padding=0.0)
 
                 # Encode initial env observation; z.shape is (env_count, L)
-                z = agent.encoder.encode_obs(data["observation"][:, 0])["codes"]
+                z = agent.encode_obs(data["observation"][:, 0])["codes"]
 
                 # Predict next max_t latent states and calculate reward diff on the way
-                ctx_t = agent.encoder.get_context(data["observation"][..., 0])
+                ctx_t = agent.get_context(data["observation"][..., 0])
                 for t in range(max_t):
                     rew_pred_t = agent.encoder.reward(z, actions[:, t], ctx_t).detach()
                     if cfg.agent.Q_and_rew_loss == "soft-ce":
@@ -624,8 +627,9 @@ def train(cfg: TrainConfig):
             plt.close()
 
         ##### Log rank of latent and active codebook percent #####
-        batch = rb.sample(batch_size=agent.encoder.cfg.latent_dim)
-        eval_metrics.update(agent.metrics(batch))
+        if cfg.agent.use_representation_learning:
+            batch = rb.sample(batch_size=agent.encoder.cfg.latent_dim)
+            eval_metrics.update(agent.metrics(batch))
 
         ##### Log metrics to W&B or csv #####
         writer.log_scalar(name="eval/", value=eval_metrics)
