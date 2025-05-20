@@ -75,6 +75,7 @@ class TrainConfig:
     visualize_body_embeddings: bool = False  # Visualize body embeddings using t-SNE
     visualize_task_embeddings: bool = False  # Visualize task embeddings using t-SNE
     verify_dyn_and_rew: bool = False  # Run dynamics for long and check rewards
+    get_embedding_cosine: bool = False
 
     # W&B config
     use_wandb: bool = False
@@ -339,6 +340,23 @@ def train(cfg: TrainConfig):
         in_keys=["observation"],
         out_keys=["action"],
     )
+
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    def cos_sim(a, b):
+        a = a[0].flatten()
+        b = b[0].flatten()
+        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+    if cfg.get_embedding_cosine:
+        task_ids = torch.arange(n_task).long().to(cfg.device)
+        task_emb = agent.encoder._task_emb(task_ids).detach().cpu().numpy()
+
+        for i in range(n_task):
+            for j in range(i + 1, n_task):
+                cs = cos_sim([task_emb[i]], [task_emb[j]])
+                print(env_names[i], env_names[j], cs)
+        exit()
 
     ##### Print information about run #####
     mstep = (cfg.num_episodes * cfg.max_episode_steps) / 1e6
