@@ -1,0 +1,25 @@
+Metric,Experiment,Score,CI_low,CI_high
+IQM,MultiQRL,0.754,0.7,0.808
+IQM,w/ naive IDs,0.714,0.682,0.803
+IQM,w/ one-hot,0.729,0.718,0.745
+IQM,w/ one-hot & w/ naive IDs,0.742,0.72,0.844
+IQM,One-hot MT-TD3,0.645,0.581,0.714
+IQM,TD-MPC2 w/ mpc=False,0.677,0.646,0.7
+Mean,MultiQRL,0.754,0.715,0.794
+Mean,w/ naive IDs,0.731,0.692,0.789
+Mean,w/ one-hot,0.73,0.72,0.743
+Mean,w/ one-hot & w/ naive IDs,0.767,0.726,0.829
+Mean,One-hot MT-TD3,0.648,0.599,0.696
+Mean,TD-MPC2 w/ mpc=False,0.674,0.652,0.693
+Median,MultiQRL,0.754,0.715,0.794
+Median,w/ naive IDs,0.731,0.692,0.789
+Median,w/ one-hot,0.73,0.72,0.743
+Median,w/ one-hot & w/ naive IDs,0.767,0.726,0.829
+Median,One-hot MT-TD3,0.648,0.599,0.696
+Median,TD-MPC2 w/ mpc=False,0.674,0.652,0.693
+Optimality Gap,MultiQRL,0.246,0.206,0.285
+Optimality Gap,w/ naive IDs,0.269,0.211,0.308
+Optimality Gap,w/ one-hot,0.27,0.257,0.28
+Optimality Gap,w/ one-hot & w/ naive IDs,0.233,0.171,0.274
+Optimality Gap,One-hot MT-TD3,0.352,0.304,0.401
+Optimality Gap,TD-MPC2 w/ mpc=False,0.326,0.307,0.348

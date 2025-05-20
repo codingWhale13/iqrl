@@ -1,0 +1,17 @@
+Metric,Experiment,Score,CI_low,CI_high
+IQM,MultiQRL,0.933,0.885,0.954
+IQM,W/ n-step=1,0.921,0.865,0.955
+IQM,W/ n-step=3,0.931,0.921,0.943
+IQM,TD-MPC2 w/ mpc=False,0.796,0.754,0.835
+Mean,MultiQRL,0.926,0.896,0.952
+Mean,W/ n-step=1,0.914,0.878,0.946
+Mean,W/ n-step=3,0.931,0.923,0.941
+Mean,TD-MPC2 w/ mpc=False,0.794,0.765,0.826
+Median,MultiQRL,0.926,0.896,0.952
+Median,W/ n-step=1,0.914,0.878,0.946
+Median,W/ n-step=3,0.931,0.923,0.941
+Median,TD-MPC2 w/ mpc=False,0.794,0.765,0.826
+Optimality Gap,MultiQRL,0.074,0.048,0.104
+Optimality Gap,W/ n-step=1,0.086,0.054,0.122
+Optimality Gap,W/ n-step=3,0.069,0.059,0.077
+Optimality Gap,TD-MPC2 w/ mpc=False,0.206,0.174,0.235

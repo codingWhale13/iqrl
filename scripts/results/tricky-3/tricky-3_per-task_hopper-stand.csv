@@ -1,0 +1,14 @@
+Metric,Experiment,Score,CI_low,CI_high
+IQM,MultiQRL,0.428,0.104,0.839
+IQM,W/ n-step=1,0.49,0.07,0.89
+IQM,W/o CE,0.467,0.244,0.801
+IQM,W/o reward model,0.465,0.193,0.765
+IQM,W/o cond. LayerNorm,0.221,0.014,0.62
+IQM,Cond. only encoder,0.478,0.087,0.754
+IQM,Cond. only 1st layer,0.439,0.019,0.701
+IQM,W/o soft-CE,0.228,0.014,0.497
+IQM,W/ one-hot,0.259,0.043,0.702
+IQM,W/o FSQ (& w/o CE),0.39,0.074,0.797
+IQM,One-hot MT-TD3,0.776,0.677,0.854
+IQM,TD-MPC2 w/ mpc=False,0.473,0.119,0.727
+IQM,iQRL (single-task),0.825,0.705,0.871

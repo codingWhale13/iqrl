@@ -1,0 +1,645 @@
+iqrl-2024-11-01_17-24-04 (first "full" run, ended prematurely after 24h on interactive node (CPU)) => dub5vvri
+iqrl-2024-11-12_11-46-49 (first GPU run, walker-walk_walker-run, performance collapse) => dt48jm9a
+iqrl-2024-11-12_13-15-14 (run single env with new code to verify that I didn't mess anything up entirely, GPU training) => iyg9mbs3
+iqrl-2024-11-16_12-23-15 (walker-walk_walker-walk, to test trivial "2-task" scenario) => 9o8x237q
+iqrl-2024-11-19_18-38-37 (fixed bug (reset didn't contain IDs before), for some reason recovers after performance collapse ) => 26kd9zpn
+iqrl-2024-11-26_11-47-08 (90% run, 10% walk) => 3q43yuga
+iqrl-2024-12-03_15-09-00 (ww_wr seed 0 -> meh) => 5g9jixx2
+iqrl-2024-12-03_15-28-25 (ww_wr seed 1 -> meh) => upqdzlky
+iqrl-2024-12-03_15-28-25 (ww_wr seed 2-> meh) => g0vf4clp
+iqrl-2024-12-03_15-28-25 (ww_wr seed 3 -> success!) => o1659x81
+iqrl-2024-12-13_15-05-44 (first time per-task logging) => eaka17e2
+iqrl-2024-12-15_19-02-03 (per-task, different seed) => hbni3yn6
+iqrl-2024-12-16_20-06-17 (first time using ParallelEnv) => sep1rd9y
+iqrl-2025-01-01_15-39-16 (cartpole-balance_cup-catch -> success!) => ws63l89w
+iqrl-2025-01-03_07-26-24 (cb_cc, seed 3, only 100 episodes) => 93zvqfbi
+iqrl-2025-01-03_07-26-24 (cb_cc, seed 1, only 100 episodes) => n9gi2vh8
+iqrl-2025-01-03_07-26-24 (cb_cc, seed 2, only 100 episodes) => vqmw53j8
+iqrl-2025-01-03_07-26-24 (cb_cc, seed 0, only 100 episodes) => xmaccijq
+iqrl-2025-01-06_15-31-29 (easy-7,  seed 0) => 2pyouu4v
+iqrl-2025-01-06_15-31-29 (easy-7,  seed 3) => nliam3c1
+iqrl-2025-01-06_15-31-29 (easy-7,  seed 2) => qslprxva
+iqrl-2025-01-06_15-31-29 (easy-7,  seed 1) => f62k1yg2
+iqrl-2025-01-07_11-21-22 (baseline cartpole-balance seed 0) => fvdz9tyt
+iqrl-2025-01-07_11-21-22 (baseline cartpole-balance seed 1) => 27dorj7o
+iqrl-2025-01-07_11-21-22 (sanity check with cb seed 0) => hno7oui8
+iqrl-2025-01-07_11-26-39 (baseline cup-catch seed 0) => w6pj5bql
+iqrl-2025-01-07_11-26-39 (baseline cup-catch seed 1) => d076ru2q
+iqrl-2025-01-07_11-31-18 (baseline finger-spin seed 0) => c5s4fqop
+iqrl-2025-01-07_11-31-18 (baseline finger-spin seed 1) => pxa4j4mt
+iqrl-2025-01-07_11-33-14 (baseline hopper-stand seed 1) => 6pc3njg8
+iqrl-2025-01-07_11-33-14 (baseline hopper-stand seed 0) => n41leean
+iqrl-2025-01-07_11-34-50 (baseline pendulum-swingup seed 1) => dt2hnyin
+iqrl-2025-01-07_11-34-50 (baseline pendulum-swingup seed 0) => vuz5m3ez
+iqrl-2025-01-07_14-28-21 (baseline walker-stand seed 0) => wsclanzy
+iqrl-2025-01-07_14-28-21 (baseline walker-stand seed 1) => nr6ttfn0
+iqrl-2025-01-07_14-30-04 (baseline walker-walk seed 1) => jmx9q8o7
+iqrl-2025-01-07_14-30-04 (baseline walker-walk seed 0) => vtpqlk60
+iqrl-2025-01-08_12-16-29 (easy-7, unused actions 0 in pi update (s2)) => 5mdffjqb
+iqrl-2025-01-08_12-16-29 (easy-7, unused actions 0 in pi update (s1)) => dbyin9tv
+iqrl-2025-01-08_12-16-29 (easy-7, unused actions 0 in pi update (s0)) => h3y0tj7q
+iqrl-2025-01-08_12-16-29 (easy-7, unused actions 0 in pi update (s3)) => vfy5h232
+iqrl-2025-01-08_16-40-31 (easy-7, now with MLP size 1024 (s1)) => 2y8abysp
+iqrl-2025-01-08_16-40-31 (easy-7, now with MLP size 1024 (s3)) => bdl2ujs2
+iqrl-2025-01-08_16-40-31 (easy-7, now with MLP size 1024 (s0)) => jsr0iuhz
+iqrl-2025-01-08_16-40-31 (easy-7, now with MLP size 1024 (s2)) => zimij9oy
+iqrl-2025-01-10_23-16-21 (cb-cc offline-only, MLP size 1024 (fail)) => tumw5tq7
+iqrl-2025-01-15_01-01-02 (easy-7 offline, using offline reward (fail)) => trwswudn
+iqrl-2025-01-15_10-28-35 (easy-7 offline, using separate eval_env (s2)) => 70ng2lrp
+iqrl-2025-01-15_10-28-35 (easy-7 offline, using separate eval_env (s1)) => hx46xc5s
+iqrl-2025-01-15_15-42-23 (action ranges easy-7) => b6vqufsf
+iqrl-2025-01-16_14-44-53 (action ranges cartpole-balance) => vh9epa48
+iqrl-2025-01-21_15-34-58 (TD3-BC without state normalization (1k eps per env) s0) => 2v8dwe7h
+iqrl-2025-01-21_15-35-06 (TD3-BC, per-task state normalization (1k eps per env) s0) => 1vdmuc4g
+iqrl-2025-01-21_15-34-58 (TD3-BC without state normalization (1k eps per env) s1) => 76s0h8sn
+iqrl-2025-01-21_15-34-58 (TD3-BC without state normalization (1k eps per env) s2) => xrhqan1r
+iqrl-2025-01-21_15-34-58 (buggy TD3-BC without state normalization (1k eps per env) s3) => vzacmsjl
+iqrl-2025-01-21_15-35-06 (buggy TD3-BC, per-task state normalization (1k eps per env) s1) => x220ayhx
+iqrl-2025-01-21_15-35-06 (buggy TD3-BC, per-task state normalization (1k eps per env) s2) => n47p3mzx
+iqrl-2025-01-21_15-35-06 (buggy TD3-BC, per-task state normalization (1k eps per env) s3) => ra7lxm7l
+iqrl-2025-01-21_18-33-27 (TD3-BC, overall state normalization (1k eps per env) s0) => kok1lsnw
+iqrl-2025-01-21_18-33-27 (TD3-BC, overall state normalization (1k eps per env) s2) => 3aes76sx
+iqrl-2025-01-21_18-33-27 (TD3-BC, overall state normalization (1k eps per env) s3) => tis35qg0
+iqrl-2025-01-21_18-33-27 (TD3-BC, overall state normalization (1k eps per env) s1) => 51t0211b
+iqrl-2025-01-23_12-15-34 (TD3-BC, correctly implemented per-state normalization) => mjn5ic1m
+iqrl-2025-01-27_15-14-27 (condition enc, actor, critic (seed 0)) => z6wbq2cj
+iqrl-2025-01-27_15-33-15 (condition enc, actor, critic (seed 2)) => wbajow0f
+iqrl-2025-01-27_15-33-15 (condition enc, actor, critic (seed 1)) => kq01ki6u
+iqrl-2025-01-27_15-33-15 (condition enc, actor, critic (seed 3)) => 4vfmexx1
+iqrl-2025-02-03_10-14-34 (ww_wr works better now (s2)) => 1hw9zhcc
+iqrl-2025-02-03_10-14-34 (ww_wr works better now (s3)) => px5llnkn
+iqrl-2025-02-03_10-14-34 (ww_wr works better now (s0)) => ulsykpxp
+iqrl-2025-02-03_10-14-34 (ww_wr works better now (s1)) => x6ho8lgv
+iqrl-2025-02-03_11-55-32 (condition everything easy-7 (s2)) => 6dixn2gl
+iqrl-2025-02-03_11-55-32 (condition everything easy-7 (s1)) => 9ic5fqk9
+iqrl-2025-02-03_11-55-32 (condition everything easy-7 (s0)) => g9z2ft3s
+iqrl-2025-02-03_11-55-32 (condition everything easy-7 (s3)) => ptzwgsv5
+iqrl-2025-02-04_15-21-20 (walker-all (interested in t-SNE) - s1) => 586cmu78
+iqrl-2025-02-04_15-21-20 (walker-all (interested in t-SNE) - s0) => i0dfwpbt
+iqrl-2025-02-04_15-21-20 (walker-all (interested in t-SNE) - s2) => pzvo9p6h
+iqrl-2025-02-04_15-21-20 (walker-all (interested in t-SNE) - s3) => zmf09w9a
+iqrl-2025-02-04_23-27-31 (added TransformerEncoder, easy-7 s2) => 1r9g5hd9
+iqrl-2025-02-04_23-27-31 (added TransformerEncoder, easy-7 s0) => bo2r5whf
+iqrl-2025-02-04_23-27-31 (added TransformerEncoder, easy-7 s1) => rd7j16pj
+iqrl-2025-02-04_23-27-31 (added TransformerEncoder, easy-7 s3) => n7kna5i7
+iqrl-2025-02-05_15-52-07 (walker-all but NO conditioning (interested in t-SNE, single run enough)) => weh2wc51
+iqrl-2025-02-10_23-49-09 (no encoders (s1)) => 5fofsku3
+iqrl-2025-02-10_23-49-09 (no encoders (s3)) => axgq8gv7
+iqrl-2025-02-10_23-49-09 (no encoders (s2)) => e5y5dw0a
+iqrl-2025-02-10_23-49-09 (no encoders (s0)) => ovomycdi
+iqrl-2025-02-12_09-24-25 (use state encoder + action encoder) => 9j24dnrh
+iqrl-2025-02-12_10-02-53 (use state encoder + action encoder (also t-SNE latent actions)) => ilx2uwun
+iqrl-2025-02-12_11-03-37 (just state encoder (but new implementation)) => 7v0lj980
+iqrl-2025-02-17_13-34-16 (OK easy-7 BEFORE any changes related to action encoder) => vl7guvmx
+iqrl-2025-02-17_14-31-31 (OK easy-7 INBETWEEN (branch "stripped")) => m0445cee
+iqrl-2025-02-18_17-04-59 (both encoders -> horrible performance) => aevge2yt
+iqrl-2025-02-19_10-06-54 (just state encoder (sanity check)) => 7s98qfpv
+iqrl-2025-02-19_10-35-08 (just state encoder, same seed but not same performance! why?!) => u1x8q3yr
+iqrl-2025-02-19_12-32-16 (both encoders, with correct FSQ init but buggy because not using latent actions correctly!) => lh84q7rg
+iqrl-2025-02-19_15-40-30 (state encoder + reward model) => 2okhq7on
+iqrl-2025-02-19_22-50-11 (both encoders, bug-fixed) => l96ug6rm
+iqrl-2025-02-20_00-05-12 (both encoders + reward (seed 2)) => 8dge6lm8
+iqrl-2025-02-20_00-05-12 (both encoders + reward (seed 3)) => iz25m3mi
+iqrl-2025-02-21_10-57-47 (4 DAYS: both encoders + reward (seed 4)) => mlk2krob
+iqrl-2025-02-21_10-57-47 (4 DAYS: both encoders + reward (seed 5)) => 5u2wqcl3
+iqrl-2025-02-22_13-41-48 (4 DAYS: both encoders + reward (seed 2)) => hh0vbqej
+iqrl-2025-02-22_13-41-48 (4 DAYS: both encoders + reward (seed 3)) => r30rn9nn
+iqrl-2025-02-23_14-19-04 (stochastic dynamics (seed 0)) => xy53v6s7
+iqrl-2025-02-24_00-57-39 (stochastic dynamics (seed 1)) => kuu0kohy
+iqrl-2025-02-24_00-57-39 (stochastic dynamics (seed 2)) => uy0wrayx
+iqrl-2025-02-24_00-57-39 (stochastic dynamics (seed 3)) => zlfeg6io
+iqrl-2025-02-24_10-49-33 (stochastic, hard 2 of easy-7 (seed 0)) => 0j35es7r
+iqrl-2025-02-24_10-49-33 (stochastic, hard 2 of easy-7 (seed 1)) => s3tnpiue
+iqrl-2025-02-24_15-35-16 (stochastic, hard 2 of easy-7, MDP 512-512, reward conditioning (seed 0)) => jsqwkk6d
+iqrl-2025-02-24_15-35-16 (stochastic, hard 2 of easy-7, MDP 512-512, reward conditioning (seed 1)) => kqbmmpts
+iqrl-2025-02-25_15-04-19 (stochastic, hard 2 of easy-7, MDP 10241024, reward conditioning (seed 1)) => 4f5m6hzc
+iqrl-2025-02-25_15-04-19 (stochastic, hard 2 of easy-7, MDP 10241024, reward conditioning (seed 0)) => 9tnorsiu
+iqrl-2025-02-28_13-35-01 (None) => arnauo41
+iqrl-2025-02-28_13-37-20 (code mod (critic same dist I hope as dynamics, nstep=1 (but no action encoder oops)) => 9w09r8o7
+iqrl-2025-02-28_13-37-50 (code mod, nstep=1 (no action encoder lol)) => gdwtjfk8
+iqrl-2025-03-01_01-58-26 (code mod, nstep=3 (no action encoder lol)) => ztcfm0v0
+iqrl-2025-03-01_17-55-32 (code as before, nstep=3 (no action encoder lol)) => ftx9unz7
+iqrl-2025-03-02_16-02-46 (critic_next_s=rollout, nstep=3, expl steps=200 (s2)) => 3g8tx0cm
+iqrl-2025-03-02_16-02-46 (critic_next_s=rollout, nstep=3, expl steps=200 (s1)) => a9vjo50a
+iqrl-2025-03-02_16-02-46 (critic_next_s=rollout, nstep=3, expl steps=200 (s0)) => hokgptyn
+iqrl-2025-03-02_16-02-46 (critic_next_s=rollout, nstep=3, expl steps=200 (s3)) => rruylbxt
+iqrl-2025-03-02_22-39-53 (critic_next_s=rollout, nstep=1, expl steps=200 (s0)) => 1r6japsi
+iqrl-2025-03-02_22-39-53 (critic_next_s=rollout, nstep=1, expl steps=200 (s1)) => nmvsx0o0
+iqrl-2025-03-02_22-39-53 (critic_next_s=rollout, nstep=1, expl steps=200 (s2)) => wo21whnx
+iqrl-2025-03-02_22-39-53 (critic_next_s=rollout, nstep=1, expl steps=200 (s3)) => zt3phlsc
+iqrl-2025-03-03_11-31-26 (critic_next_s=rollout, nstep=3, expl steps=50 (s1)) => 9v465s1m
+iqrl-2025-03-03_11-31-26 (critic_next_s=rollout, nstep=3, expl steps=50 (s3)) => o6k0pwsq
+iqrl-2025-03-03_11-31-26 (critic_next_s=rollout, nstep=3, expl steps=50 (s2)) => ujrt0t98
+iqrl-2025-03-03_11-32-46 (critic_next_s=rollout, nstep=3, expl steps=50 (s0)) => lkdtj2v8
+iqrl-2025-03-03_11-33-20 (critic_next_s=rollout, nstep=3, expl steps=50, action encoder=False (s2)) => e18u17o0
+iqrl-2025-03-03_11-33-20 (critic_next_s=rollout, nstep=3, expl steps=50, action encoder=False (s0)) => qflnjvcl
+iqrl-2025-03-03_11-33-20 (critic_next_s=rollout, nstep=3, expl steps=50, action encoder=False (s1)) => 9dpued1a
+iqrl-2025-03-03_11-33-20 (critic_next_s=rollout, nstep=3, expl steps=50, action encoder=False (s3)) => 1ly2qcdi
+iqrl-2025-03-04_15-40-55 (dog run Q1 L2 (seed 0)) => 4y4s7el8
+iqrl-2025-03-04_15-40-55 (dog run Q1 L2 (seed 1)) => 6iknigdf
+iqrl-2025-03-04_15-40-55 (dog run Q1 L2 (seed 2)) => 9y2puelc
+iqrl-2025-03-04_15-40-55 (dog run Q1 L2 (seed 3)) => j4ty2feq
+iqrl-2025-03-04_15-51-22 (dog run Q2 L2 (seed 1)) => h004r3bz
+iqrl-2025-03-04_15-51-22 (dog run Q2 L2 (seed 3)) => u5tvflzl
+iqrl-2025-03-04_15-51-22 (dog run Q2 L2 (seed 2)) => y95qn6i6
+iqrl-2025-03-04_15-51-22 (dog run Q2 L2 (seed 0)) => mu62rkqo
+iqrl-2025-03-04_16-09-35 (dog run Q1 L1 (seed 0)) => 305eph6c
+iqrl-2025-03-04_16-09-35 (dog run Q1 L1 (seed 1)) => 4jmam1qy
+iqrl-2025-03-04_16-09-35 (dog run Q1 L1 (seed 3)) => j80m1qn0
+iqrl-2025-03-04_16-09-35 (dog run Q1 L1 (seed 2)) => ohi1i7nm
+iqrl-2025-03-04_16-11-56 (dog run Q2 L1 (seed 2)) => 3oawfiuk
+iqrl-2025-03-04_16-11-56 (dog run Q2 L1 (seed 0)) => 4fdhq9sv
+iqrl-2025-03-04_16-11-56 (dog run Q2 L1 (seed 3)) => eb1wpnu7
+iqrl-2025-03-04_16-11-56 (dog run Q2 L1 (seed 1)) => yyucb9g9
+iqrl-2025-03-06_19-49-06 (critic_next_s=encoded, nstep=3, expl steps=50 (s2)) => jmxsjws8
+iqrl-2025-03-06_19-49-06 (critic_next_s=encoded, nstep=3, expl steps=50 (s3)) => wyczaoi3
+iqrl-2025-03-06_19-49-06 (critic_next_s=encoded, nstep=3, expl steps=50 (s1)) => y0bxabkc
+iqrl-2025-03-06_19-49-06 (critic_next_s=encoded, nstep=3, expl steps=50 (s0)) => g7bfbdx5
+iqrl-2025-03-06_19-54-19 (critic_next_s=rollout, nstep=1, expl steps=50 (s1)) => 2rlkriyk
+iqrl-2025-03-06_19-54-19 (critic_next_s=rollout, nstep=1, expl steps=50 (s2)) => fngguovp
+iqrl-2025-03-06_19-54-19 (critic_next_s=rollout, nstep=1, expl steps=50 (s0)) => u5zzu4pd
+iqrl-2025-03-06_19-54-19 (critic_next_s=rollout, nstep=1, expl steps=50 (s3)) => c3k6x4wi
+tdmpc2-2025-03-11_09-49-24 (First proper TD-MPC2 run (but just 1 eval episode -> wobbly)) => 9uz8m60n
+tdmpc2-2025-03-12_00-22-33 (None) => iwt41jfh
+tdmpc2-2025-03-12_06-06-52 (None) => ofhfn20y
+tdmpc2-2025-03-12_11-24-03 (TD-MPC2 easy-7 seed 0) => 16gvpdto
+tdmpc2-2025-03-12_12-27-47 (TD-MPC2 easy-7 seed 2) => 9pv4q84f
+tdmpc2-2025-03-12_12-27-47 (TD-MPC2 easy-7 seed 1) => sa83gdby
+tdmpc2-2025-03-12_12-27-47 (TD-MPC2 easy-7 seed 3) => xypwemsb
+iqrl-2025-03-18_11-25-53 (hd-multiqrl-1 (embedded context)) => hcqbz7h4
+iqrl-2025-03-18_11-51-43 (hd-multiqrl-1 (embedded context)) => 5b0tvjff
+iqrl-2025-03-18_11-51-43 (hd-multiqrl-1 (embedded context)) => 97g044qy
+iqrl-2025-03-18_11-51-43 (hd-multiqrl-1 (embedded context)) => d0amo45c
+iqrl-2025-03-18_12-11-51 (hd-multiqrl-2 (one-hot context)) => 5ulrax99
+iqrl-2025-03-18_12-11-51 (hd-multiqrl-2 (one-hot context)) => jvaejji4
+iqrl-2025-03-18_12-11-51 (hd-multiqrl-2 (one-hot context)) => r89infwy
+iqrl-2025-03-18_12-11-51 (hd-multiqrl-2 (one-hot context)) => yuf4xo3z
+tdmpc2-2025-03-18_12-41-33 (easy7-tdmpc2 w/o MPC) => q2lay9uy
+tdmpc2-2025-03-18_12-42-45 (hd-tdmpc2 w/o MPC) => ii7ctxf9
+tdmpc2-2025-03-18_12-51-08 (hd-tdmpc2 w/o MPC) => feiwwl7d
+tdmpc2-2025-03-18_12-51-08 (hd-tdmpc2 w/o MPC) => mwvu3i54
+tdmpc2-2025-03-18_12-51-08 (hd-tdmpc2 w/o MPC) => mwwa3bo5
+tdmpc2-2025-03-18_13-26-03 (easy7-tdmpc2 w/o MPC) => ndm6h4mf
+tdmpc2-2025-03-18_13-27-33 (easy7-tdmpc2 w/o MPC) => pzyh2d9s
+tdmpc2-2025-03-18_13-27-33 (easy7-tdmpc2 w/o MPC) => ugimpend
+iqrl-2025-03-19_12-15-49 (hd-multiqrl-3 (one-hot context + action encoder)) => 05c97a7x
+iqrl-2025-03-19_12-15-49 (hd-multiqrl-3 (one-hot context + action encoder)) => 13qxcxwv
+iqrl-2025-03-19_12-15-49 (hd-multiqrl-3 (one-hot context + action encoder)) => 8ndvzm0h
+iqrl-2025-03-19_12-15-49 (hd-multiqrl-3 (one-hot context + action encoder)) => sio0eh8f
+iqrl-2025-03-19_12-24-03 (hd-multiqrl-4 (embedded context + action encoder)) => 13ae1kr1
+iqrl-2025-03-19_12-24-03 (hd-multiqrl-4 (embedded context + action encoder)) => gt573fz0
+iqrl-2025-03-19_12-24-03 (hd-multiqrl-4 (embedded context + action encoder)) => 8gwxlovf
+iqrl-2025-03-19_12-24-03 (hd-multiqrl-4 (embedded context + action encoder)) => aml2he42
+iqrl-2025-03-25_11-05-40 (dw-multiqrl-1 (env on CUDA)) => iahz59jx
+iqrl-2025-03-25_12-34-06 (dw-multiqrl-1 (env on CPU)) => mnjxfnyh
+iqrl-2025-03-26_13-41-29 (using SAC instead of TD3 for the first time) => ir4hso19
+iqrl-2025-03-26_14-23-55 (hw-multiqrl-1 (params=hd-multiqrl-1, single-task!)) => adgweoce
+iqrl-2025-03-26_14-23-55 (hw-multiqrl-1 (params=hd-multiqrl-1, single-task!)) => x88pta1l
+iqrl-2025-03-26_14-23-55 (hw-multiqrl-1 (params=hd-multiqrl-1, single-task!)) => 9o7ocjcc
+iqrl-2025-03-26_14-23-55 (hw-multiqrl-1 (params=hd-multiqrl-1, single-task!)) => 93u183gw
+iqrl-2025-03-26_14-48-59 (hw-multiqrl-2 (nstep=1, critic_next_s=rollout)) => kfijzdmo
+iqrl-2025-03-26_14-48-59 (hw-multiqrl-2 (nstep=1, critic_next_s=rollout)) => m8q44m33
+iqrl-2025-03-26_14-48-59 (hw-multiqrl-2 (nstep=1, critic_next_s=rollout)) => wqc04hzn
+iqrl-2025-03-26_14-48-59 (hw-multiqrl-2 (nstep=1, critic_next_s=rollout)) => zf1g47aw
+iqrl-2025-03-26_14-53-11 (hw-multiqrl-3 (nstep=1, critic_next_s=encoded)) => jeog43fw
+iqrl-2025-03-26_14-53-11 (accidentally killed - hw-multiqrl-3 (nstep=1, critic_next_s=encoded)) => atf4cxek
+iqrl-2025-03-26_14-53-11 (hw-multiqrl-3 (nstep=1, critic_next_s=encoded)) => j4ubc3el
+iqrl-2025-03-26_14-53-11 (hw-multiqrl-3 (nstep=1, critic_next_s=encoded)) => xlvjxwg2
+iqrl-2025-03-26_15-03-58 (SAC sanity-check) => f987hpqa
+tdmpc2-2025-03-27_01-29-47 (dw-tdmpc2) => oo02spz5
+tdmpc2-2025-03-27_01-32-44 (dw-tdmpc2) => 1zzku1vs
+tdmpc2-2025-03-27_01-33-19 (dw-tdmpc2) => 2w9rtu0x
+tdmpc2-2025-03-27_01-34-56 (dw-tdmpc2) => f73x3qzt
+iqrl-2025-03-27_13-43-09 (MultiQRL SAC, now using minQ in pi update) => 2v93xwx3
+iqrl-2025-03-27_13-43-09 (MultiQRL SAC, now using minQ in pi update) => ajn76vuz
+iqrl-2025-03-27_13-43-09 (MultiQRL SAC, now using minQ in pi update) => w7ya9qmk
+iqrl-2025-03-27_13-43-09 (MultiQRL SAC, now using minQ in pi update) => y07o1opx
+iqrl-2025-03-27_14-15-20 (MultiQRL nstep=1 critic_next_s=rollout - fixed rb bug) => 2kz4cemi
+iqrl-2025-03-27_14-15-20 (MultiQRL nstep=1 critic_next_s=rollout - fixed rb bug) => d86ampiw
+iqrl-2025-03-27_14-15-20 (MultiQRL nstep=1 critic_next_s=rollout - fixed rb bug) => ihifthut
+iqrl-2025-03-27_14-15-20 (MultiQRL nstep=1 critic_next_s=rollout - fixed rb bug) => tgqqfejg
+iqrl-2025-03-29_11-38-41 (hd-5 nstep=1 critic_next_s=rollout (+ log_per_task)) => 0kqq594b
+iqrl-2025-03-29_11-52-30 (hd-5 nstep=1 critic_next_s=rollout) => sa3ge43l
+iqrl-2025-03-29_11-52-30 (hd-5 nstep=1 critic_next_s=rollout) => t9l516z2
+iqrl-2025-03-29_12-07-00 (hd-6 nstep=1 critic_next_s=encoded (+ log_per_task)) => 61vqgcq9
+iqrl-2025-03-29_12-09-50 (hd-6 nstep=1 critic_next_s=encoded) => 45mt8rk9
+iqrl-2025-03-29_12-09-50 (hd-6 nstep=1 critic_next_s=encoded) => ikdo0vnd
+iqrl-2025-03-31_19-52-28 (None) => uih2hc5l
+iqrl-2025-04-01_11-14-29 (fs-1 (encoded, nstep=1)) => ygmxmyro
+iqrl-2025-04-01_11-17-43 (fs-3 (rollout, nstep=1)) => 4kf0yrp3
+iqrl-2025-04-01_11-18-16 (fs-2 (encoded, nstep=3)) => 77pzupjx
+iqrl-2025-04-01_11-18-39 (fs-4 (rollout, nstep=3)) => fjd8a7t4
+iqrl-2025-04-02_15-24-44 (fs-verify old commit (seed 1)) => cojw0l1k
+iqrl-2025-04-02_15-56-37 (fs-verify2) => qe9x70lp
+iqrl-2025-04-02_16-19-26 (fs-verify3) => ofeqb029
+iqrl-2025-04-02_16-43-36 (None) => njiz457k
+iqrl-2025-04-02_17-13-13 (None) => 2fv46rt8
+iqrl-2025-04-02_22-06-01 (fs final nstep=1 encoded) => 9ph4ouk9
+iqrl-2025-04-02_22-06-01 (fs final nstep=1 encoded) => d84ofzoy
+iqrl-2025-04-02_22-09-47 (fs final nstep=1 rollout) => 8lr1zyro
+iqrl-2025-04-02_22-09-47 (fs final nstep=1 rollout) => 90fnf87k
+iqrl-2025-04-02_22-10-06 (fs final nstep=3 rollout) => ltikjy02
+iqrl-2025-04-02_22-09-57 (fs final nstep=3 encoded) => r8kcj6ex
+iqrl-2025-04-02_22-09-57 (fs final nstep=3 encoded) => t4qfyfe8
+iqrl-2025-04-02_22-10-06 (fs final nstep=3 rollout) => uccgz2ee
+iqrl-2025-04-03_12-05-16 (TD-lambda: nstep=1, encoded) => 1khs26os
+iqrl-2025-04-03_12-54-52 (TD-lambda: nstep=1, rollout) => 1cz81c42
+iqrl-2025-04-08_14-49-21 (hdr: rollout, median-lambda-returns) => x0s4lr4v
+iqrl-2025-04-08_15-12-09 (None) => sq3w7lh7
+iqrl-2025-04-08_19-04-51 (hdr: rollout, median-lambda-returns) => f4fkf28x
+iqrl-2025-04-08_22-10-26 (hdr: rollout, median-lambda-returns (log_per_task_q)) => ig83c1o7
+iqrl-2025-04-09_10-18-22 (hdr: encoded, median-lambda-returns) => tlszi2g5
+iqrl-2025-04-09_10-21-59 (hdr: encoded, median-lambda-returns (log_per_task_q)) => 7wor3uhb
+iqrl-2025-04-09_10-18-22 (hdr: encoded, median-lambda-returns) => lp12l71j
+tdmpc2-2025-04-09_11-51-15 (hwr: TD-MPC2 model-free) => a2ewff5h
+tdmpc2-2025-04-09_11-53-30 (hwr: TD-MPC2 model-free) => ofopy5bq
+tdmpc2-2025-04-09_11-54-31 (hwr: TD-MPC2 model-free) => oouehs1d
+iqrl-2025-04-09_23-48-01 (hdr: encoded, nstep=1) => ak6ngr7r
+iqrl-2025-04-09_23-48-24 (hdr: encoded, nstep=1 (log_per_task_q)) => h14xcdu8
+iqrl-2025-04-09_23-48-01 (hdr: encoded, nstep=1) => po416cv2
+iqrl-2025-04-12_16-53-42 (first shot at twohot loss) => nybn357b
+iqrl-2025-04-13_10-58-08 (twohot, using symlog transform) => 0g2s9ixp
+iqrl-2025-04-14_16-47-49 (first time using full batch for actor and critic updates) => 1fzw4kfv
+iqrl-2025-04-14_18-10-13 (full batch, nstep=1, rollout) => bktcnsj7
+iqrl-2025-04-14_18-10-13 (full batch, nstep=1, rollout) => xlm3zz14
+iqrl-2025-04-15_15-31-27 (SANITY CHECK new but reverted "full batch actor update" change) => qi548h8b
+iqrl-2025-04-15_15-56-06 (ww before full-batch updates (-2 commits)) => yuung0is
+iqrl-2025-04-15_16-47-47 (soft-ce (with symlog), log_per_task_q (buggy Q logging)) => saktklhq
+iqrl-2025-04-15_17-35-53 (single-task hr, mse) => 0xmsv7ia
+iqrl-2025-04-15_19-01-48 (single-task dr, mse) => 33vo9jq5
+iqrl-2025-04-15_19-05-33 (single-task hr, soft-ce (buggy Q logging)) => hijzgb1w
+iqrl-2025-04-15_19-11-14 (single-task dr, soft-ce (buggy Q logging)) => lfzrbous
+iqrl-2025-04-16_14-39-55 (single-task hr, soft-ce) => rlyouioy
+iqrl-2025-04-16_14-47-17 (single-task dr, soft-ce) => md32jc7m
+iqrl-2025-04-16_14-49-44 (soft-ce (with symlog), log_per_task_q) => rvktvvc8
+iqrl-2025-04-17_00-03-54 (single-task hr, soft-ce (new seed)) => sa7oqsid
+iqrl-2025-04-17_00-03-54 (single-task hr, soft-ce (new seed)) => tls5d8gh
+tdmpc2-2025-04-17_22-51-28 (same, but seed 4) => zntr5wn3
+tdmpc2-2025-04-17_23-05-29 (using "TD3", i.e. pi_loss=-q.mean()) => wn2fo5jm
+iqrl-2025-04-18_11-10-34 (BUGGY SAC revisited) => bbuab11r
+iqrl-2025-04-18_23-34-34 (BUGGY SAC revisited (seed 1)) => 6zc4j7vp
+tdmpc2-2025-04-18_23-51-17 (TD-MPC2 without soft-ce) => n71957vw
+tdmpc2-2025-04-19_09-41-32 (tdmpc2 w/o simlog) => qdfqz2l8
+iqrl-2025-04-19_13-25-02 (SAC (fixed implementation 19.4.)) => fktg5f6e
+iqrl-2025-04-19_15-19-44 (MultiQRL with Simlog, first time) => rko4noj7
+iqrl-2025-04-20_00-24-54 (simple SAC, use old-school losses) => 0k9c3xmf
+iqrl-2025-04-20_00-24-54 (simple SAC, use old-school losses) => z2xf3lwl
+tdmpc2-2025-04-21_11-29-37 (None) => xzwgaoia
+tdmpc2-2025-04-21_11-36-44 (TDMPC2 without reward) => yirgfe88
+tdmpc2-2025-04-21_12-04-30 (TDMPC constant coeffs) => co39b3oz
+iqrl-2025-04-22_16-21-44 ("B", but update_Q_with_rep=True) => wm5a1phc
+iqrl-2025-04-23_00-29-31 ("B", but update_Q_with_rep=True and strong weighting) => dj569yxg
+tdmpc2-2025-04-23_22-49-45 (None) => c7gt0k7j
+tdmpc2-2025-04-23_23-19-00 (TD-MPC2 stripped-A (s0)) => v20qpfl5
+tdmpc2-2025-04-24_00-22-39 (TD-MPC2 stripped-A (s1)) => s6bmpn45
+tdmpc2-2025-04-24_00-24-02 (TD-MPC2 stripped-A (s2)) => lhcz2qgp
+tdmpc2-2025-04-24_12-11-15 (TD-MPC2 stripped-B (s3)) => f1hvvcyi
+tdmpc2-2025-04-24_12-54-29 (None) => 61j76q8t
+tdmpc2-2025-04-24_19-12-38 (None) => si1x66lp
+iqrl-2025-04-24_19-57-36 (None) => 9n716eu2
+iqrl-2025-04-25_00-48-26 (challenge-6, first try) => 7utu5iee
+iqrl-2025-04-25_00-48-26 (challenge-6, first try) => lv16u46a
+iqrl-2025-04-25_00-48-26 (challenge-6, first try) => o1qw4dmv
+tdmpc2-2025-04-25_00-57-04 (None) => 09e9a1gj
+iqrl-2025-04-25_01-00-37 (None) => 8nmtyqzr
+iqrl-2025-04-25_01-00-37 (None) => pdb25y7d
+iqrl-2025-04-25_01-00-37 (None) => a37siyuc
+iqrl-2025-04-25_12-15-04 (None) => sm8bedhl
+iqrl-2025-04-25_12-42-08 (c4 A) => 26fznzko
+iqrl-2025-04-25_12-42-08 (c4 A) => a0kcagfa
+iqrl-2025-04-25_12-42-08 (c4 A) => lmw4pcwt
+tdmpc2-2025-04-25_23-46-45 (None) => j86gh6t6
+iqrl-2025-04-26_10-12-30 (f5 A (first fly for final-5)) => havdmpou
+iqrl-2025-04-26_12-49-32 (f5 A) => k3jtxbt4
+iqrl-2025-04-26_12-49-32 (f5 A) => 8g8g7dqv
+iqrl-2025-04-26_12-49-32 (f5 A) => ysldory0
+iqrl-2025-04-26_12-49-32 (f5 A) => yz5b7llx
+iqrl-2025-04-26_12-50-47 (f5 B) => bidtv3km
+iqrl-2025-04-26_12-50-47 (f5 B) => janjc7oy
+iqrl-2025-04-26_12-50-47 (f5 B) => w8tyzd6b
+iqrl-2025-04-26_12-50-47 (f5 B) => 6ya665im
+iqrl-2025-04-26_12-50-47 (f5 B) => gy62vw8b
+iqrl-2025-04-27_00-20-08 (f5 C) => jk2iha0q
+iqrl-2025-04-27_00-23-16 (f5 D) => 1gl5f735
+iqrl-2025-04-27_00-53-31 (f5 C (log_per_task_q)) => 38l43nko
+iqrl-2025-04-27_00-54-59 (f5 D (log_per_task_q)) => iillxqjj
+iqrl-2025-04-27_00-57-06 (f5 B (log_per_task_q)) => 0blu1s19
+iqrl-2025-04-27_00-56-12 (f5 A (log_per_task_q)) => wy43gbk6
+iqrl-2025-04-27_10-37-50 (hd-stand A) => l90vxafk
+iqrl-2025-04-27_10-37-50 (hd-stand A) => o8frsgoh
+iqrl-2025-04-27_10-37-50 (hd-stand A) => oqm5mm50
+iqrl-2025-04-27_10-50-34 (t3 A) => ex73rfi6
+iqrl-2025-04-27_10-50-34 (t3 A) => f367nok6
+iqrl-2025-04-27_10-50-34 (t3 A) => xhrse6yp
+iqrl-2025-04-27_20-23-38 (t3 C) => pkuw6oxo
+iqrl-2025-04-27_22-50-07 (t3 C) => jemrye7j
+iqrl-2025-04-27_22-50-07 (t3 C) => yl0qy0hb
+iqrl-2025-04-27_23-39-45 (t3 B) => hqnt3hnv
+iqrl-2025-04-27_23-39-45 (t3 B) => peqipjxr
+iqrl-2025-04-28_09-39-45 (f5 D) => nx3uy69b
+iqrl-2025-04-28_09-39-45 (f5 D) => 4n9rpupe
+iqrl-2025-04-28_09-39-45 (f5 D) => 6vd4uwb0
+iqrl-2025-04-28_09-39-45 (f5 D) => fs3lr8f5
+iqrl-2025-04-28_09-42-42 (t3 B) => ee7qcz2m
+iqrl-2025-04-28_10-35-14 (t3 E) => j872nf4x
+iqrl-2025-04-28_10-35-14 (t3 E) => j1siiylz
+iqrl-2025-04-28_10-35-14 (t3 E) => vcjjpmpv
+iqrl-2025-04-28_23-15-33 (f5 E) => 74fr6vdc
+iqrl-2025-04-28_23-15-33 (f5 E) => ytrgvkhy
+iqrl-2025-04-28_23-15-33 (f5 E) => 2y4kvyh3
+iqrl-2025-04-28_23-59-39 (t3 F) => nut830m0
+iqrl-2025-04-28_23-59-39 (t3 F) => z6cnwnm9
+iqrl-2025-04-28_23-59-39 (t3 F) => bz8h76ev
+iqrl-2025-04-29_09-25-04 (t3 D) => b5alysls
+iqrl-2025-04-29_09-25-04 (t3 D) => ekn0a6hn
+iqrl-2025-04-29_09-24-53 (hd-stand B) => iqttzjv0
+iqrl-2025-04-29_09-24-53 (hd-stand B) => kdv5sg9g
+iqrl-2025-04-29_09-24-53 (hd-stand B) => knuiz2b4
+iqrl-2025-04-29_09-25-04 (t3 D CRASH (worker timed out, not sure why)) => vrd0lrj8
+iqrl-2025-04-29_23-53-11 (ST iQRL) => 166cs9ot
+iqrl-2025-04-29_23-53-11 (ST iQRL) => 0qxnnqbh
+iqrl-2025-04-29_23-53-11 (ST iQRL) => ic4rlnql
+iqrl-2025-04-29_23-55-08 (ST iQRL) => c3fkmb4j
+iqrl-2025-04-29_23-55-08 (ST iQRL) => ffkfpn58
+iqrl-2025-04-29_23-55-08 (ST iQRL) => 728ezxue
+iqrl-2025-04-30_15-52-51 (ST iQRL) => 1r5gwwjx
+iqrl-2025-04-30_15-53-27 (ST iQRL) => c5ga2izu
+iqrl-2025-04-30_15-52-51 (ST iQRL) => d7rhze4o
+iqrl-2025-04-30_15-52-51 (ST iQRL) => icraymdc
+iqrl-2025-04-30_15-53-27 (ST iQRL) => mqiqh6t7
+iqrl-2025-04-30_15-53-27 (ST iQRL) => smetbpxz
+iqrl-2025-04-30_15-54-00 (ST iQRL) => exfm4bia
+iqrl-2025-04-30_15-54-00 (ST iQRL) => 45wow1wv
+iqrl-2025-04-30_15-54-00 (ST iQRL) => fhgnzvc3
+iqrl-2025-05-01_11-46-57 (t3 G) => cc9xwz8g
+iqrl-2025-05-01_11-46-57 (t3 G) => l6u20lmm
+iqrl-2025-05-01_11-46-57 (t3 G) => sjktk6jp
+iqrl-2025-05-01_11-49-00 (t3 H) => b9hid587
+iqrl-2025-05-01_11-49-00 (t3 H) => kdhpbny7
+iqrl-2025-05-01_11-49-00 (t3 H) => sp823iuy
+iqrl-2025-05-02_00-43-28 (t3 G) => 68bry2kh
+iqrl-2025-05-02_00-43-28 (t3 G) => bnyrfalp
+iqrl-2025-05-02_00-44-07 (t3 H) => 1imrj8tp
+iqrl-2025-05-02_00-44-07 (t3 H) => 3qu89lh8
+iqrl-2025-05-02_19-25-39 (t3 light-A) => 22zvjts2
+iqrl-2025-05-02_19-25-39 (t3 light-A) => 5g9r8jn0
+iqrl-2025-05-02_19-25-39 (t3 light-A) => oxf9af6t
+iqrl-2025-05-02_20-20-06 (t3 light-B) => hzl2qiox
+iqrl-2025-05-02_20-20-06 (t3 light-B) => mnrdvstp
+iqrl-2025-05-02_20-20-06 (t3 light-B) => vzozg4v4
+iqrl-2025-05-02_20-23-02 (t3 light-A noise-decy-500) => 14w2vkcx
+iqrl-2025-05-02_20-23-02 (t3 light-A noise-decy-500) => biopg5oo
+iqrl-2025-05-02_20-23-02 (t3 light-A noise-decy-500) => njdw0doj
+iqrl-2025-05-03_09-02-15 (hd-stand final-C) => 9aj6sazo
+iqrl-2025-05-03_09-02-15 (hd-stand final-C) => d58mvezn
+iqrl-2025-05-03_09-02-15 (hd-stand final-C) => to46ggbu
+iqrl-2025-05-04_11-10-52 (t3 MultiQRL-v2 tiny MLP) => f9xucysl
+iqrl-2025-05-04_11-10-52 (t3 MultiQRL-v2 tiny MLP) => jaj0lo23
+iqrl-2025-05-04_13-31-12 (light A CP-loading (from 500k)) => 72v54z8l
+iqrl-2025-05-04_13-45-28 (old-A, CP-loading) => w8f8f415
+iqrl-2025-05-04_15-25-46 (LOAD CP, use 10 random episodes) => ozv8sy9z
+iqrl-2025-05-04_15-40-00 (same, but different seed) => bs5liju7
+iqrl-2025-05-04_17-09-42 (t3 final-A) => c9jkk4o9
+iqrl-2025-05-04_17-09-42 (t3 final-A) => fdtmlupm
+iqrl-2025-05-04_17-09-42 (t3 final-A) => hxo9e892
+iqrl-2025-05-05_11-26-06 (t3 final-B) => 6vt0wu8y
+iqrl-2025-05-05_11-26-06 (t3 final-B) => s3tfuxk2
+iqrl-2025-05-05_11-26-06 (t3 final-B) => y7cpc3f2
+iqrl-2025-05-05_14-09-17 (t3 final-C) => 2r5220t6
+iqrl-2025-05-05_14-09-17 (t3 final-C) => 3by9fvsa
+iqrl-2025-05-05_18-43-40 (t3 final-D) => 4p96cwdi
+iqrl-2025-05-05_18-43-40 (t3 final-D) => 5xeg7y5j
+iqrl-2025-05-05_14-09-17 (t3 final-C) => fckbdynk
+iqrl-2025-05-05_18-43-40 (t3 final-D) => ig86y66r
+iqrl-2025-05-06_19-53-13 (t3 final-E) => p83mwvfl
+iqrl-2025-05-06_19-53-13 (t3 final-E) => 0skyv29t
+iqrl-2025-05-06_19-53-13 (t3 final-E) => 9ufb0krt
+iqrl-2025-05-06_22-43-39 (t3 final-F) => d3r4uuib
+iqrl-2025-05-06_22-43-39 (t3 final-F) => 6yi0cufw
+iqrl-2025-05-06_22-49-50 (t3 final-G) => b70hf02x
+iqrl-2025-05-06_22-43-39 (t3 final-F) => cglz2804
+iqrl-2025-05-06_22-49-50 (t3 final-G) => ojd6risa
+iqrl-2025-05-06_22-50-57 (t3 final-H) => 1t8ii962
+iqrl-2025-05-06_22-49-50 (t3 final-G) => r0nio6ii
+iqrl-2025-05-06_22-50-57 (t3 final-H) => npmkdtek
+iqrl-2025-05-06_22-50-57 (t3 final-H) => r71ksdyd
+iqrl-2025-05-06_22-51-27 (t3 final-I) => bwyogl52
+iqrl-2025-05-06_22-51-27 (t3 final-I) => ijrsbf9e
+iqrl-2025-05-06_22-51-27 (t3 final-I) => 807uir8r
+iqrl-2025-05-06_23-50-57 (t3 final-A) => f6fky7wj
+iqrl-2025-05-06_23-50-57 (t3 final-A) => eonoz2ng
+iqrl-2025-05-06_23-51-13 (t3 final-B) => ka1grhx3
+iqrl-2025-05-06_23-51-13 (t3 final-B) => ghjkvist
+iqrl-2025-05-09_21-21-27 (t3 final-G) => iulebgd0
+iqrl-2025-05-09_21-21-27 (t3 final-G) => 9mtxv1up
+iqrl-2025-05-09_21-21-27 (t3 final-H) => 34k3fggm
+iqrl-2025-05-09_21-21-27 (t3 final-H) => e8h5ntuj
+iqrl-2025-05-09_21-21-27 (t3 final-F) => ycyadrud
+iqrl-2025-05-09_21-21-27 (t3 final-F) => v2tvicny
+iqrl-2025-05-09_21-21-27 (t3 final-I) => v1jr6mfw
+iqrl-2025-05-09_21-21-27 (t3 final-I) => k7mscq1y
+iqrl-2025-05-09_21-21-27 (t3 final-E) => c66y8o2f
+iqrl-2025-05-09_21-21-27 (t3 final-E) => pvh9tmly
+iqrl-2025-05-09_21-21-27 (t3 final-C) => t6yn7ikb
+iqrl-2025-05-09_21-21-27 (t3 final-D) => 6w5i99lx
+iqrl-2025-05-09_21-21-27 (t3 final-C) => djq5oz43
+iqrl-2025-05-09_21-21-27 (t3 final-D) => sa1d6pak
+iqrl-2025-05-11_18-04-51 (fsdw final-A) => me4qpu7w
+iqrl-2025-05-11_18-19-36 (fsdw final-A) => lqd17o0w
+iqrl-2025-05-11_18-19-36 (fsdw final-A) => nbwt66h6
+iqrl-2025-05-11_18-22-05 (fsdw final-B) => 5p4x99jf
+iqrl-2025-05-11_18-22-05 (fsdw final-B) => 801p4xqw
+iqrl-2025-05-11_18-22-05 (fsdw final-B) => 9rluaag8
+iqrl-2025-05-11_18-23-45 (fsdw final-C) => 9ds0gqlf
+iqrl-2025-05-11_18-23-45 (fsdw final-C) => jc6qx720
+iqrl-2025-05-11_18-23-45 (fsdw final-C) => lony30ju
+iqrl-2025-05-11_21-33-18 (t3 final-J) => f86wwbif
+iqrl-2025-05-11_21-37-06 (t3 final-J) => 7862249j
+iqrl-2025-05-11_21-37-06 (t3 final-J) => 9x2rt8p2
+iqrl-2025-05-11_21-37-06 (t3 final-J) => oqtf9bgu
+iqrl-2025-05-11_21-37-06 (t3 final-J) => 1q9yt9yl
+iqrl-2025-05-11_22-17-46 (fsdw final-A) => h3n98fmj
+iqrl-2025-05-11_22-17-46 (fsdw final-A) => shuxbe3r
+iqrl-2025-05-11_22-18-01 (fsdw final-B) => pbfo0g6u
+iqrl-2025-05-11_22-18-01 (fsdw final-B) => g2uxolh1
+iqrl-2025-05-11_22-18-30 (fsdw final-C) => 5dtg5clo
+iqrl-2025-05-11_22-18-30 (fsdw final-C) => 7r0ai7p0
+tdmpc2-2025-05-13_03-03-06 (None) => odx39xei
+iqrl-2025-05-13_09-31-47 (hd-stand final-C) => 16scan9z
+iqrl-2025-05-13_09-31-47 (hd-stand final-C) => 639p2eql
+iqrl-2025-05-13_09-37-14 (hd-stand final-D) => 2pyrstwr
+iqrl-2025-05-13_09-37-14 (hd-stand final-D) => 93abu4hk
+iqrl-2025-05-13_09-37-14 (hd-stand final-D) => ctnyi9vr
+iqrl-2025-05-13_09-37-14 (hd-stand final-D) => gg2rxfaz
+iqrl-2025-05-13_09-37-14 (hd-stand final-D) => xozj9c58
+tdmpc2-2025-05-13_09-44-05 (TD-MPC2 t3 (half episodes)) => pt4qtojc
+tdmpc2-2025-05-13_09-45-37 (TD-MPC2 t3 (half episodes)) => zsngc1mx
+tdmpc2-2025-05-13_09-46-34 (TD-MPC2 t3TD-MPC2 t3 (half episodes)) => rova5e9n
+tdmpc2-2025-05-13_09-48-36 (TD-MPC2 fsdw) => ye2ldolb
+tdmpc2-2025-05-13_10-28-09 (TD-MPC2 t3 (half episodes)) => mhpkeet9
+tdmpc2-2025-05-13_10-28-09 (TD-MPC2 t3 (half episodes)) => opp6nf56
+tdmpc2-2025-05-13_14-02-28 (TD-MPC2 fsdw) => g2zxgbgy
+tdmpc2-2025-05-13_14-02-28 (TD-MPC2 fsdw) => ud6uothg
+tdmpc2-2025-05-13_14-02-52 (TD-MPC2 fsdw) => a0jn1j7q
+tdmpc2-2025-05-13_14-02-52 (TD-MPC2 fsdw) => d2iaolgf
+iqrl-2025-05-13_23-59-13 (hd-stand final-E) => ltzxsmwn
+iqrl-2025-05-13_23-59-13 (hd-stand final-E) => 3aht3miz
+iqrl-2025-05-13_23-59-13 (hd-stand final-E) => mx258qk4
+iqrl-2025-05-14_19-47-35 (walker-all final-A) => 1zp9zqip
+iqrl-2025-05-14_20-34-17 (None) => dq9sq5m2
+iqrl-2025-05-14_20-38-24 (verifying embeddings) => n536b6yn
+iqrl-2025-05-14_21-04-24 (walker-all final-A) => ra7b5sr3
+iqrl-2025-05-14_21-04-24 (walker-all final-A) => aenmg9ig
+iqrl-2025-05-14_21-04-24 (walker-all final-A) => 7150h1oc
+iqrl-2025-05-14_21-04-24 (walker-all final-A) => v5wkvaut
+iqrl-2025-05-15_09-29-32 (MultiQRL-v2 on ST wr) => 03l0vhnt
+iqrl-2025-05-15_09-29-32 (MultiQRL-v2 on ST wr) => 8sf0hjtq
+iqrl-2025-05-15_09-29-32 (MultiQRL-v2 on ST wr) => pk623zcg
+iqrl-2025-05-15_09-30-02 (MultiQRL-v2 on ST ww) => 9l04z9e1
+iqrl-2025-05-15_09-30-02 (MultiQRL-v2 on ST ww) => 82tld3oh
+iqrl-2025-05-15_09-30-34 (MultiQRL-v2 on ST ws) => dghit6c0
+iqrl-2025-05-15_09-30-02 (MultiQRL-v2 on ST ww) => esezzowl
+iqrl-2025-05-15_09-30-34 (MultiQRL-v2 on ST ws) => lopkc49l
+iqrl-2025-05-15_09-30-34 (MultiQRL-v2 on ST ws) => ak7l3smc
+iqrl-2025-05-15_19-30-51 (MultiQRL-v2 on ST ws) => gtabpwxe
+iqrl-2025-05-15_19-30-51 (MultiQRL-v2 on ST ws) => up7goh94
+iqrl-2025-05-15_19-33-01 (MultiQRL-v2 on ST ww) => 9873okdm
+iqrl-2025-05-15_19-33-01 (MultiQRL-v2 on ST ww) => d4uf4kyw
+iqrl-2025-05-15_19-33-19 (MultiQRL-v2 on ST wr) => buiaawwe
+iqrl-2025-05-15_19-33-19 (MultiQRL-v2 on ST wr) => bhkax87d
+tdmpc2-2025-05-15_20-19-50 (tdmpc2 final-5) => atk38eck
+iqrl-2025-05-15_20-38-45 (final-5-v2 final-A) => eqg4d9zz
+iqrl-2025-05-15_20-43-28 (final-5-v2 final-A) => joigd2cd
+tdmpc2-2025-05-15_21-01-09 (tdmpc2 final-5) => 4crzssmy
+tdmpc2-2025-05-15_21-01-09 (tdmpc2 final-5) => z0f0wnxn
+tdmpc2-2025-05-15_21-01-23 (tdmpc2 final-5) => 1bpsvau6
+tdmpc2-2025-05-15_21-01-23 (tdmpc2 final-5) => z4rkd271
+iqrl-2025-05-15_21-04-49 (final-5-v2 final-A) => 41vruqcy
+iqrl-2025-05-15_21-04-49 (final-5-v2 final-A) => aod9te08
+iqrl-2025-05-15_21-04-49 (final-5-v2 final-A) => apgkkvmz
+iqrl-2025-05-15_22-57-32 (None) => on44lesf
+iqrl-2025-05-15_23-10-11 (final-5-v2 final-B) => e14texy8
+iqrl-2025-05-15_23-55-35 (final-5-v2 final-C) => m2llhptc
+iqrl-2025-05-15_23-59-48 (final-5-v2 final-B) => l4e005mp
+iqrl-2025-05-15_23-59-48 (final-5-v2 final-B) => iq6gguq7
+iqrl-2025-05-15_23-59-48 (final-5-v2 final-B) => tzctqon2
+iqrl-2025-05-15_23-59-48 (final-5-v2 final-B) => ugsdflc2
+iqrl-2025-05-16_00-37-07 (None) => lqy1u1oi
+iqrl-2025-05-16_07-35-58 (w3s3-5 final-C) => 8e2j0chq
+iqrl-2025-05-16_07-55-06 (final-4 A) => qduq3258
+iqrl-2025-05-16_07-57-21 (final-4 B) => omgie5ti
+iqrl-2025-05-16_08-05-21 (final-4 B) => 28gu5eye
+iqrl-2025-05-16_08-05-21 (final-4 B) => 5ib9yw44
+iqrl-2025-05-16_08-05-21 (final-4 B) => jyjx1vdw
+iqrl-2025-05-16_08-05-21 (final-4 B) => q21pje76
+iqrl-2025-05-16_08-08-11 (final-4 A) => 0ohltkcw
+iqrl-2025-05-16_08-08-11 (final-4 A) => 15t6dphm
+iqrl-2025-05-16_08-08-11 (final-4 A) => 78vm2o3k
+iqrl-2025-05-16_08-08-11 (final-4 A) => yqk11i6w
+tdmpc2-2025-05-16_08-18-07 (final-4 C) => fq7n36l3
+tdmpc2-2025-05-16_08-23-15 (final-4 C) => qx2f40xt
+tdmpc2-2025-05-16_08-23-53 (final-4 C) => 9bfd9ajd
+tdmpc2-2025-05-16_08-23-53 (final-4 C) => dyutz0o9
+tdmpc2-2025-05-16_08-23-53 (final-4 C) => ng2ieem0
+iqrl-2025-05-16_08-46-39 (w3s3-5 final-C) => 6ulhitro
+iqrl-2025-05-16_08-46-39 (w3s3-5 final-C) => h9onipwz
+iqrl-2025-05-16_08-46-39 (w3s3-5 final-C) => owo0ly4e
+iqrl-2025-05-16_08-46-39 (w3s3-5 final-C) => upzki7zy
+iqrl-2025-05-16_08-54-14 (w3s3-5 final-E) => w6yx7zyb
+iqrl-2025-05-16_09-18-27 (w3s3-5 final-D) => 4a7llm33
+iqrl-2025-05-16_09-17-58 (w3s3-5 final-E) => 61pkw024
+iqrl-2025-05-16_09-18-27 (w3s3-5 final-D) => 8lkmp881
+iqrl-2025-05-16_09-17-58 (w3s3-5 final-E) => d29nij71
+iqrl-2025-05-16_09-18-27 (w3s3-5 final-D) => figk8wfn
+iqrl-2025-05-16_09-18-27 (w3s3-5 final-D) => hv2at86v
+iqrl-2025-05-16_09-17-58 (w3s3-5 final-E) => r9s9cxb5
+iqrl-2025-05-16_09-17-58 (w3s3-5 final-E) => rn2n337a
+iqrl-2025-05-16_09-18-27 (w3s3-5 final-D) => v34bn00v
+iqrl-2025-05-17_11-51-59 (ST iQRL (but not logged conveniently)) => h541zqso
+iqrl-2025-05-17_12-04-29 (ST iQRL dog-stand) => ts653shd
+iqrl-2025-05-17_12-11-24 (ST iQRL pendulum-swingup) => a9x80j30
+iqrl-2025-05-17_12-11-24 (ST iQRL pendulum-swingup) => uk1e5id0
+iqrl-2025-05-17_12-11-55 (ST iQRL finger-spin) => 1mjfvf08
+iqrl-2025-05-17_12-11-24 (ST iQRL pendulum-swingup) => 70obpjwj
+iqrl-2025-05-17_12-11-55 (ST iQRL finger-spin) => hzct25nc
+iqrl-2025-05-17_12-11-55 (ST iQRL finger-spin) => nh7kl3zn
+iqrl-2025-05-17_12-11-55 (ST iQRL finger-spin) => pkhw7xx5
+iqrl-2025-05-17_12-11-55 (ST iQRL finger-spin) => rqj76w8y
+iqrl-2025-05-17_12-11-24 (ST iQRL pendulum-swingup) => tctljema
+iqrl-2025-05-17_12-11-24 (ST iQRL pendulum-swingup) => x2eunga6
+iqrl-2025-05-17_12-25-06 (ST iQRL cartpole-balance) => 6vulo89q
+iqrl-2025-05-17_12-25-06 (ST iQRL cartpole-balance) => my4zf30e
+iqrl-2025-05-17_12-25-06 (ST iQRL cartpole-balance) => 0pmnvezl
+iqrl-2025-05-17_12-25-06 (ST iQRL cartpole-balance) => 27pgwdde
+iqrl-2025-05-17_12-25-06 (ST iQRL cartpole-balance) => fxjknclp
+iqrl-2025-05-17_12-26-44 (ST iQRL cup-catch) => 2rsz5dbs
+iqrl-2025-05-17_12-26-44 (ST iQRL cup-catch) => 6ofo8jn3
+iqrl-2025-05-17_12-26-44 (ST iQRL cup-catch) => f7am5zzr
+iqrl-2025-05-17_12-26-44 (ST iQRL cup-catch) => j6r55wdp
+iqrl-2025-05-17_12-26-44 (ST iQRL cup-catch) => v7wsizsz
+iqrl-2025-05-17_12-30-05 (ST iQRL dog-walk) => e6oa43kh
+iqrl-2025-05-17_12-30-05 (ST iQRL dog-walk) => i0eaqgqs
+iqrl-2025-05-17_12-30-05 (ST iQRL dog-walk) => j8oib2m5
+iqrl-2025-05-17_12-30-05 (ST iQRL dog-walk) => k3jdcr4z
+iqrl-2025-05-17_12-30-05 (ST iQRL dog-walk) => oum7s69j
+iqrl-2025-05-17_12-30-50 (ST iQRL walker-stand) => m9xgn6ot
+iqrl-2025-05-17_12-30-50 (ST iQRL walker-stand) => quxs0m3z
+iqrl-2025-05-17_12-30-50 (ST iQRL walker-stand) => vp38t01e
+iqrl-2025-05-17_12-30-50 (ST iQRL walker-stand) => 684of0b1
+iqrl-2025-05-17_12-30-50 (ST iQRL walker-stand) => efk0tqo8
+iqrl-2025-05-17_12-36-50 (ST iQRL dog-stand) => 7ecz7ql9
+iqrl-2025-05-17_12-36-50 (ST iQRL dog-stand) => s5yptf53
+iqrl-2025-05-17_12-36-50 (ST iQRL dog-stand) => w587ghla
+iqrl-2025-05-17_12-38-50 (ST iQRL hopper-stand (tricky-3 ablation)) => pvdnwltq
+iqrl-2025-05-17_12-38-50 (ST iQRL hopper-stand (tricky-3 ablation)) => 3meebuoy
+iqrl-2025-05-17_12-38-50 (ST iQRL hopper-stand (tricky-3 ablation)) => uy97vece
+iqrl-2025-05-17_12-38-50 (ST iQRL hopper-stand (tricky-3 ablation)) => qdgwozb8
+iqrl-2025-05-17_12-38-50 (ST iQRL hopper-stand (tricky-3 ablation)) => g36vj3o5
+iqrl-2025-05-17_12-39-12 (ST iQRL pendulum-swingup (tricky-3 ablation)) => 7yzfo6ap
+iqrl-2025-05-17_12-39-12 (ST iQRL pendulum-swingup (tricky-3 ablation)) => sr9ny6qq
+iqrl-2025-05-17_12-39-12 (ST iQRL pendulum-swingup (tricky-3 ablation)) => ef835602
+iqrl-2025-05-17_12-39-12 (ST iQRL pendulum-swingup (tricky-3 ablation)) => is38syrr
+iqrl-2025-05-17_12-39-12 (ST iQRL pendulum-swingup (tricky-3 ablation)) => k715goj6
+iqrl-2025-05-17_12-39-27 (ST iQRL finger-spin (tricky-3 ablation)) => i9c7czoz
+iqrl-2025-05-17_12-39-27 (ST iQRL finger-spin (tricky-3 ablation)) => 9m07dyrm
+iqrl-2025-05-17_12-39-27 (ST iQRL finger-spin (tricky-3 ablation)) => rd9drmlu
+iqrl-2025-05-17_12-39-27 (ST iQRL finger-spin (tricky-3 ablation)) => b9n8detd
+iqrl-2025-05-17_12-39-27 (ST iQRL finger-spin (tricky-3 ablation)) => up2nsn2v
+iqrl-2025-05-17_16-14-25 (ST iQRL hopper-stand) => b4hm7ugz
+iqrl-2025-05-17_16-14-25 (ST iQRL hopper-stand) => 634tq813
+iqrl-2025-05-17_16-14-25 (ST iQRL hopper-stand) => btfjnh5i
+iqrl-2025-05-17_16-14-25 (ST iQRL hopper-stand) => v391aepi
+iqrl-2025-05-17_16-14-25 (ST iQRL hopper-stand) => av4glxbg
+iqrl-2025-05-17_16-14-25 (ST iQRL walker-run) => y9w66o50
+iqrl-2025-05-17_16-14-25 (ST iQRL walker-run) => kiyghn5z
+iqrl-2025-05-17_16-14-25 (ST iQRL walker-run) => m19by8vc
+iqrl-2025-05-17_16-14-25 (ST iQRL walker-run) => 2bl5k6ss
+iqrl-2025-05-17_16-14-25 (ST iQRL walker-run) => ru475g9n
+iqrl-2025-05-17_16-14-25 (ST iQRL walker-walk) => nd2caq2a
+iqrl-2025-05-17_16-14-25 (ST iQRL walker-walk) => z4ayjomc
+iqrl-2025-05-17_16-14-25 (ST iQRL walker-walk) => k5t3gwqa
+iqrl-2025-05-17_16-14-25 (ST iQRL walker-walk) => i0k4p0td
+iqrl-2025-05-17_16-14-25 (ST iQRL walker-walk) => krb69zpi
+iqrl-2025-05-17_18-36-05 (ST iQRL dog-stand) => efgampel
+iqrl-2025-05-17_18-36-05 (ST iQRL dog-stand) => tffqryy9
+iqrl-2025-05-17_23-16-26 (walker-all 1-hot TD3) => ef5evw0d
+iqrl-2025-05-17_23-16-26 (walker-all 1-hot TD3) => llpqc46y
+iqrl-2025-05-17_23-16-26 (walker-all 1-hot TD3) => n7owite3
+iqrl-2025-05-17_23-16-26 (walker-all 1-hot TD3) => j2y6k2hk
+iqrl-2025-05-17_23-16-26 (walker-all 1-hot TD3) => wi7fyi1o
+iqrl-2025-05-17_23-35-57 (fsdw 1-hot TD3) => wwp139xq
+iqrl-2025-05-17_23-35-57 (fsdw 1-hot TD3) => i51mzlug
+iqrl-2025-05-17_23-35-57 (fsdw 1-hot TD3) => 9858hpa9
+iqrl-2025-05-17_23-35-57 (fsdw 1-hot TD3) => nnhhbwuw
+iqrl-2025-05-17_23-35-57 (fsdw 1-hot TD3) => opnh1h2v
+iqrl-2025-05-17_23-37-05 (walker3-stand3-5 1-hot TD3) => ggrmi8z8
+iqrl-2025-05-17_23-37-05 (walker3-stand3-5 1-hot TD3) => g8mkd0h8
+iqrl-2025-05-17_23-37-05 (walker3-stand3-5 1-hot TD3) => 3t33di5n
+iqrl-2025-05-17_23-37-05 (walker3-stand3-5 1-hot TD3) => n0qm2wcn
+iqrl-2025-05-17_23-37-05 (walker3-stand3-5 1-hot TD3) => sfdgi95m
+iqrl-2025-05-18_02-55-45 (tricky-3 final 1-hot TD3) => 23hhsr8s
+iqrl-2025-05-18_02-55-45 (tricky-3 final 1-hot TD3) => 9jgtsrkk
+iqrl-2025-05-18_02-55-45 (tricky-3 final 1-hot TD3) => q9ihnejt
+iqrl-2025-05-18_02-55-45 (tricky-3 final 1-hot TD3) => xd3e32hf
+iqrl-2025-05-18_02-55-45 (tricky-3 final 1-hot TD3) => xiwp41iu
+tdmpc2-2025-05-18_03-07-39 (None) => ueufardu

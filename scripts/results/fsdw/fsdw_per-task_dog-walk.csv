@@ -1,0 +1,5 @@
+Metric,Experiment,Score,CI_low,CI_high
+IQM,MultiQRL,0.919,0.903,0.929
+IQM,W/ n-step=1,0.922,0.913,0.926
+IQM,W/ n-step=3,0.895,0.888,0.907
+IQM,TD-MPC2 w/ mpc=False,0.822,0.811,0.84
