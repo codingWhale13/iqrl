@@ -1,5 +1,0 @@
-Metric,Experiment,Score,CI_low,CI_high
-IQM,MultiQRL,0.927,0.854,0.973
-IQM,One-hot MT-TD3,0.761,0.589,0.804
-IQM,TD-MPC2 w/ mpc=False,0.947,0.843,0.981
-IQM,iQRL (single-task),0.927,0.887,0.979

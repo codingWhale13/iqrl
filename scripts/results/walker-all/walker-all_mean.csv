@@ -1,9 +1,0 @@
-Metric,Experiment,Score,CI_low,CI_high
-IQM,MultiQRL,0.918,0.915,0.921
-IQM,One-hot MT-TD3,0.897,0.892,0.902
-Mean,MultiQRL,0.918,0.916,0.921
-Mean,One-hot MT-TD3,0.897,0.893,0.901
-Median,MultiQRL,0.918,0.916,0.921
-Median,One-hot MT-TD3,0.897,0.893,0.901
-Optimality Gap,MultiQRL,0.082,0.079,0.084
-Optimality Gap,One-hot MT-TD3,0.103,0.099,0.107
