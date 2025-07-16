@@ -8,6 +8,7 @@ import torch.nn as nn
 from torch.func import functional_call, stack_module_state
 from torch.linalg import cond, matrix_rank
 from vector_quantize_pytorch import FSQ as _FSQ
+from tensordict import LazyStackedTensorDict
 
 
 def soft_update_params(model, model_target, tau: float):
@@ -456,3 +457,56 @@ def soft_ce(pred: torch.Tensor, target: torch.Tensor, cfg):
     pred = nn.functional.log_softmax(pred, dim=-1)
     target = two_hot(target, cfg)
     return -(target * pred).sum(-1)
+
+
+def rollout_with_ids(
+    agent,  # type: iQRL (leads to circular import, thus only implicitly mentioned here)
+    env,
+    body_id,
+    task_id,
+    eval_mode: bool,
+    max_steps: int,
+    return_contiguous: bool = True,
+):
+    """
+    Simplified version of torchrl.envs.common.EnvBase.rollout().
+
+    Implicitly uses break_when_any_done=False i.e. _rollout_nonstop and auto_reset=True.
+    """
+    tensordict = env.reset()
+    tensordicts = []
+    tensordict_ = tensordict
+    for i in range(max_steps):
+        obs = tensordict_["observation"]
+        action = agent.select_action(
+            obs=obs, body_id=body_id, task_id=task_id, eval_mode=eval_mode
+        )
+        tensordict_["action"] = action
+
+        if i == max_steps - 1:
+            tensordict = env.step(tensordict_)
+        else:
+            tensordict, tensordict_ = env.step_and_maybe_reset(tensordict_)
+        tensordicts.append(tensordict)
+        if i == max_steps - 1:
+            # we don't truncate as one could potentially continue the run
+            break
+
+    if return_contiguous:
+        try:
+            out_td = torch.stack(tensordicts, len(env.batch_size))
+        except RuntimeError as err:
+            if (
+                "The shapes of the tensors to stack is incompatible" in str(err)
+                and env._has_dynamic_specs
+            ):
+                raise RuntimeError(
+                    "The environment specs are dynamic. Call rollout with return_contiguous=False."
+                )
+            raise
+    else:
+        out_td = LazyStackedTensorDict.maybe_dense_stack(
+            tensordicts, len(env.batch_size)
+        )
+
+    return out_td

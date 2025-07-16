@@ -5,7 +5,7 @@ import gymnasium as gym
 from dm_control import suite
 from tensordict import TensorDictBase
 import torch
-from torchrl.data.tensor_specs import Bounded, Categorical, Composite
+from torchrl.data.tensor_specs import Bounded, Composite
 from torchrl.envs import GymEnv, StepCounter, TransformedEnv
 from torchrl.envs.transforms import (
     CatFrames,
@@ -23,58 +23,6 @@ from torchrl.record.loggers import WandbLogger
 
 from .dmcontrol import make_env as dmcontrol_make_env
 from .offline_dummy import OfflineDummyEnv
-
-# NOTE: Transform._call says it's called by step() and reset() but only step() is true
-# That's why _reset is needed below. See also: https://github.com/pytorch/rl/issues/2595
-
-
-class BodyAndTaskIDs(Transform):
-    """A transform to add one-hot encoded body and/or task IDs to an env."""
-
-    def __init__(
-        self,
-        body_id: Optional[torch.Tensor] = None,
-        task_id: Optional[torch.Tensor] = None,
-        n_body: Optional[int] = None,
-        n_task: Optional[int] = None,
-    ):
-        super().__init__()
-        self.n_body = n_body
-        self.n_task = n_task
-        self.body_id = body_id
-        self.task_id = task_id
-
-    def _call(self, tensordict: TensorDictBase) -> TensorDictBase:
-        if self.body_id is not None:
-            tensordict["observation"].set("body_id", self.body_id)
-        if self.task_id is not None:
-            tensordict["observation"].set("task_id", self.task_id)
-        return tensordict
-
-    def _reset(
-        self, tensordict: TensorDictBase, tensordict_reset: TensorDictBase
-    ) -> TensorDictBase:
-        return self._call(tensordict_reset)
-
-    def transform_observation_spec(self, observation_spec: Composite) -> Composite:
-        if self.body_id is not None:
-            observation_spec["observation"]["body_id"] = Categorical(
-                n=self.n_body,
-                shape=self.body_id.shape,
-                dtype=torch.float,
-                device=observation_spec.device,
-            )
-        if self.task_id is not None:
-            observation_spec["observation"]["task_id"] = Categorical(
-                n=self.n_task,
-                shape=self.task_id.shape,
-                dtype=torch.float,
-                device=observation_spec.device,
-            )
-        return observation_spec
-
-    def forward(self, tensordict: TensorDictBase) -> TensorDictBase:
-        raise RuntimeError("BodyAndTaskIDs can only be used with a transformed env")
 
 
 class TaskMasker(Transform):
@@ -115,10 +63,6 @@ class TaskMasker(Transform):
 def make_env(
     env_name: str,
     task_name: Optional[str] = None,
-    body_id: Optional[torch.Tensor] = None,
-    task_id: Optional[torch.Tensor] = None,
-    n_body: Optional[int] = None,
-    n_task: Optional[int] = None,
     obs_dim: Optional[int] = None,
     act_dim: Optional[int] = None,
     max_act_dim: Optional[int] = None,
@@ -165,9 +109,6 @@ def make_env(
     transforms.append(DoubleToFloat())
     transforms.append(StepCounter())
     transforms.append(RewardSum())
-    transforms.append(
-        BodyAndTaskIDs(body_id=body_id, task_id=task_id, n_body=n_body, n_task=n_task)
-    )
     if act_dim is not None and max_act_dim is not None:
         transforms.append(TaskMasker(act_dim=act_dim, max_act_dim=max_act_dim))
 

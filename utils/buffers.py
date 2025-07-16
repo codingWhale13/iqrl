@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 class ReplayBufferSamples(NamedTuple):
+    body_ids: torch.Tensor
+    task_ids: torch.Tensor
     observations: TensorDict  # Zero-padded to avoid LazyStackedTensorDict
     actions: torch.Tensor  # Zero-padded to avoid torch.nested.tensor
     next_observations: TensorDict  # Zero-padded to avoid LazyStackedTensorDict
@@ -122,6 +124,8 @@ class ReplayBuffer:
                 batch = torch.cat([batch, self._sample()], 1)
             batch = batch[:, :batch_size]
         batch = ReplayBufferSamples(
+            body_ids=batch["body_id"],
+            task_ids=batch["task_id"],
             observations=batch["observation"],
             actions=batch["action"],
             next_observations=batch["next"]["observation"],
@@ -170,6 +174,8 @@ def to_nstep(
         rewards += torch.where(dones, 0, gamma**t * batch.rewards[t])
 
     nstep_batch = ReplayBufferSamples(
+        body_ids=batch.body_ids[0],
+        task_ids=batch.task_ids[0],
         observations=batch.observations[0],
         actions=batch.actions[0],
         next_observations=next_obs,
@@ -210,6 +216,8 @@ def to_all_nstep(
 
         nstep_batch = copy.deepcopy(
             ReplayBufferSamples(
+                body_ids=batch.body_ids[0],
+                task_ids=batch.task_ids[0],
                 observations=batch.observations[0],
                 z=(batch.z[0] if batch.z is not None else None),
                 # ^ these do not change; v these attributes have been n-stepped

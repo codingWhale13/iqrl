@@ -142,9 +142,7 @@ def train(cfg: TrainConfig):
         pad_sequence,
         set_get_defaults_to_none,
     )
-    from tensordict.nn import TensorDictModule
     from torchrl.data.tensor_specs import BoundedContinuous
-    from torchrl.envs import ParallelEnv
     from torchrl.record.loggers.wandb import WandbLogger
     import torch
     import wandb
@@ -213,6 +211,17 @@ def train(cfg: TrainConfig):
         task_str_to_id = h.seq_to_id(task_names)
     n_body = len(set(body_names))
     n_task = len(set(task_names))
+
+    # Prepare IDs in format (batch size=1, int dim = 1)
+    env_id_to_body_id = [
+        torch.tensor(body_str_to_id[body_names[i]], device=cfg.device).reshape((1, 1))
+        for i in range(env_count)
+    ]
+    env_id_to_task_id = [
+        torch.tensor(task_str_to_id[task_names[i]], device=cfg.device).reshape((1, 1))
+        for i in range(env_count)
+    ]
+
     print(f"{n_body=}", f"{n_task=}")
     print(f"{body_names=}")
     print(f"{task_names=}")
@@ -225,8 +234,6 @@ def train(cfg: TrainConfig):
         "from_pixels": False,
         "pixels_only": False,
         "logger": writer,
-        "n_body": n_body,
-        "n_task": n_task,
         "device": cfg.device,
     }
     create_fn = [
@@ -234,8 +241,6 @@ def train(cfg: TrainConfig):
             make_env,
             env_name=body_names_org[i],
             task_name=task_names_org[i],
-            body_id=torch.tensor([body_str_to_id[body_names[i]]], device=cfg.device),
-            task_id=torch.tensor([task_str_to_id[task_names[i]]], device=cfg.device),
             record_video=False,  # No need, video_envs will record videos
             **common_kwargs_for_make_env,
         )
@@ -260,25 +265,13 @@ def train(cfg: TrainConfig):
         for i, fn in enumerate(create_fn)
     ]
 
-    env = ParallelEnv(
-        env_count,
-        [partial(fn, use_offline_data=cfg.agent.use_offline_data) for fn in create_fn],
-    )
-    eval_env = ParallelEnv(
-        env_count,
-        [partial(fn, use_offline_data=False) for fn in create_fn],
-    )
+    envs = [fn(use_offline_data=cfg.agent.use_offline_data) for fn in create_fn]
+    eval_envs = [fn(use_offline_data=False) for fn in create_fn]
     if cfg.capture_eval_video:
         video_envs = [
             make_env(
                 env_name=body_names_org[i],
                 task_name=task_names_org[i],
-                body_id=torch.tensor(
-                    [body_str_to_id[body_names[i]]], device=cfg.device
-                ),
-                task_id=torch.tensor(
-                    [task_str_to_id[task_names[i]]], device=cfg.device
-                ),
                 record_video=cfg.capture_eval_video,
                 use_offline_data=False,
                 obs_dim=od[i],
@@ -330,17 +323,6 @@ def train(cfg: TrainConfig):
             cfg.random_episodes = 0
             logger.info("Set random_episodes=0 because checkpoint was loaded")
 
-    policy_module = TensorDictModule(
-        lambda obs: agent.select_action(obs, eval_mode=False),
-        in_keys=["observation"],
-        out_keys=["action"],
-    )
-    eval_policy_module = TensorDictModule(
-        lambda obs: agent.select_action(obs, eval_mode=True),
-        in_keys=["observation"],
-        out_keys=["action"],
-    )
-
     from sklearn.metrics.pairwise import cosine_similarity
 
     def cos_sim(a, b):
@@ -385,29 +367,37 @@ def train(cfg: TrainConfig):
                 eval_datas = []
 
             for _ in range(cfg.num_eval_episodes):
-                eval_data = eval_env.rollout(
-                    max_steps=cfg.max_episode_steps // cfg.action_repeat,
-                    policy=eval_policy_module,
-                    break_when_any_done=False,
-                )
-
-                for task_i, env_name in enumerate(env_names):
-                    episodic_returns[env_name].append(
-                        eval_data["next"]["episode_reward"][task_i][-1].cpu().item()
+                all_eval_data = []
+                for i, eval_env in enumerate(eval_envs):
+                    data = h.rollout_with_ids(
+                        agent=agent,
+                        env=eval_env,
+                        body_id=env_id_to_body_id[i],
+                        task_id=env_id_to_task_id[i],
+                        eval_mode=True,
+                        max_steps=cfg.max_episode_steps // cfg.action_repeat,
                     )
+                    ep_reward = data["next"]["episode_reward"][-1].cpu().item()
+                    episodic_returns[env_names[i]].append(ep_reward)
+                    data["body_id"] = env_id_to_body_id[i].expand(*data.batch_size, 1)
+                    data["task_id"] = env_id_to_task_id[i].expand(*data.batch_size, 1)
+                    all_eval_data.append(data)
+
+                all_eval_data = pad_sequence(all_eval_data, pad_dim=-1)
+                data = all_eval_data  # Rename for convenienct access below
 
                 if cfg.log_per_task_sa:
-                    if isinstance(eval_data, TensorDict):
-                        states = eval_data["observation"]["state"]
-                        actions = eval_data["action"]
+                    if isinstance(data, TensorDict):
+                        states = data["observation"]["state"]
+                        actions = data["action"]
                     else:
-                        states = eval_data["observation"].get_nestedtensor("state")
-                        actions = eval_data.get_nestedtensor("action")
+                        states = data["observation"].get_nestedtensor("state")
+                        actions = data.get_nestedtensor("action")
                     for task_i, env_name in enumerate(env_names):
                         all_states[env_name].append(states[task_i].cpu())
                         all_actions[env_name].append(actions[task_i].cpu())
                 if cfg.verify_dyn_and_rew:
-                    eval_datas.append(eval_data)
+                    eval_datas.append(data)
 
             for task_i, env_name in enumerate(env_names):
                 ep_return = sum(episodic_returns[env_name]) / cfg.num_eval_episodes
@@ -478,11 +468,14 @@ def train(cfg: TrainConfig):
         if is_first or is_middle or is_last:
             if cfg.capture_eval_video:
                 with torch.no_grad():
-                    for video_env in video_envs:
-                        video_env.rollout(
+                    for i, video_env in enumerate(video_envs):
+                        data = h.rollout_with_ids(
+                            agent=agent,
+                            env=video_env,
+                            body_id=env_id_to_body_id[i],
+                            task_id=env_id_to_task_id[i],
+                            eval_mode=True,
                             max_steps=cfg.max_episode_steps // cfg.action_repeat,
-                            policy=eval_policy_module,
-                            break_when_any_done=False,
                         )
                         video_env.transform.dump()
 
@@ -539,19 +532,24 @@ def train(cfg: TrainConfig):
                         }
                     )
 
-                data = pad_sequence(eval_data, pad_dim=-1)  # Pad latest eval iter
+                data = pad_sequence(data, pad_dim=-1)  # Pad latest eval iter
                 n = data.shape[1]  # Samples per env
 
                 # t-SNE expects (n_samples, n_features) -> (env_count*n, latent_dim)
                 with torch.no_grad():
+                    ctx = agent.ids_to_context(
+                        body_ids=data["body_id"], task_ids=data["task_id"]
+                    )
+
                     if cfg.visualize_latent_states:
-                        latent_states = agent.encode_obs(data["observation"])["state"]
+                        latent_states = agent.encode_obs(
+                            obs=data["observation"], ctx=ctx
+                        )["state"]
                         latent_states = latent_states.flatten(0, 1).cpu().numpy()
                         log_tsne(latent_states, "Env", "Latent states")
                     if cfg.visualize_latent_actions:
                         latent_actions = agent.encode_action(
-                            action=data["action"].to(cfg.device),
-                            ctx=agent.get_context(data["observation"]),
+                            action=data["action"].to(cfg.device), ctx=ctx
                         )
                         latent_actions = latent_actions.flatten(0, 1).cpu().numpy()
                         log_tsne(latent_actions, "Env", "Latent actions")
@@ -582,10 +580,11 @@ def train(cfg: TrainConfig):
                     actions = torch.nested.to_padded_tensor(actions, padding=0.0)
 
                 # Encode initial env observation; z.shape is (env_count, L)
-                z = agent.encode_obs(data["observation"][:, 0])["codes"]
+                z = agent.encode_obs(obs=data["observation"][:, 0], ctx=ctx)["codes"]
 
                 # Predict next max_t latent states and calculate reward diff on the way
-                ctx_t = agent.get_context(data["observation"][..., 0])
+                ctx_t = agent.ids_to_context(data["observation"][..., 0])  #  TODO
+                raise
                 for t in range(max_t):
                     rew_pred_t = agent.encoder.reward(z, actions[:, t], ctx_t).detach()
                     if cfg.agent.Q_and_rew_loss == "soft-ce":
@@ -653,16 +652,21 @@ def train(cfg: TrainConfig):
 
         ##### Log metrics to W&B or csv #####
         writer.log_scalar(name="eval/", value=eval_metrics)
-        return eval_metrics
 
     if cfg.use_offline_data:
         print("Loading offline data into replay buffer...")
-
-        rollout_blueprint = env.rollout(
-            max_steps=cfg.max_episode_steps // cfg.action_repeat,
-            policy=policy_module,
-            break_when_any_done=True,  # Same-length episodes -> break when done
-        )
+        rollout_blueprint = []
+        for i, env in enumerate(envs):
+            rollout_blueprint.append(
+                h.rollout_with_ids(
+                    agent=agent,
+                    env=env,
+                    body_id=env_id_to_body_id[i],
+                    task_id=env_id_to_task_id[i],
+                    eval_mode=False,
+                    max_steps=cfg.max_episode_steps // cfg.action_repeat,
+                )
+            )
 
         offline_data = []
         state_normalization = {}  # Needed during eval if cfg.normalize_states==True
@@ -676,10 +680,10 @@ def train(cfg: TrainConfig):
 
             task_data_raw = task_data_raw[: cfg.max_offline_episodes_per_task]
 
-            task_blueprint = rollout_blueprint[i]
-            new_shape = [task_data_raw.shape[0]] + list(task_blueprint.shape)
+            task_data = rollout_blueprint[i]
+            new_shape = [task_data_raw.shape[0]] + list(task_data.shape)
 
-            task_data = task_blueprint.unsqueeze(0).expand(new_shape)
+            task_data = task_data.unsqueeze(0).expand(new_shape)
             task_data["observation"]["state"] = task_data_raw["obs"][:, :-1]
             task_data["next"]["observation"]["state"] = task_data_raw["obs"][:, 1:]
             task_data["action"] = task_data_raw["action"][:, 1:]
@@ -718,27 +722,35 @@ def train(cfg: TrainConfig):
     for episode_idx in range(cfg.num_episodes):
         if not cfg.use_offline_data:
             ##### Rollout the policy in the environment #####
+            all_data = []
             with torch.no_grad():
-                data = env.rollout(
-                    max_steps=cfg.max_episode_steps // cfg.action_repeat,
-                    policy=policy_module,
-                    break_when_any_done=False,
-                )
+                for i, env in enumerate(envs):
+                    data = h.rollout_with_ids(
+                        agent=agent,
+                        env=env,
+                        body_id=env_id_to_body_id[i],
+                        task_id=env_id_to_task_id[i],
+                        eval_mode=False,
+                        max_steps=cfg.max_episode_steps // cfg.action_repeat,
+                    )
+                    data["body_id"] = env_id_to_body_id[i].expand(*data.batch_size, 1)
+                    data["task_id"] = env_id_to_task_id[i].expand(*data.batch_size, 1)
+                    all_data.append(data)
+
             ##### Add data to the replay buffer #####
-            data = pad_sequence(data, pad_dim=-1)  # LazyStackedTensorDict -> TensorDict
-            rb.extend(data)
+            all_data = pad_sequence(all_data, pad_dim=-1)  # LazyStackedTD -> TD
+            rb.extend(all_data)
+            data = all_data  # Rename for convenient access below
 
         if cfg.eval_only:
-            break  # Only use final eval at the very end of this function
+            break  # Got data, done (only use final eval at end of this function)
 
         if episode_idx == 0:
             if not cfg.use_offline_data:
                 print(colored("First episodes data:", "green", attrs=["bold"]), data)
 
             # Evaluate the initial agent
-            _ = evaluate(
-                cfg, steps=steps, episode_idx=episode_idx, start_time=start_time
-            )
+            evaluate(cfg, steps=steps, episode_idx=episode_idx, start_time=start_time)
 
         if not cfg.use_offline_data:
             ##### Log episode metrics #####
@@ -803,10 +815,12 @@ def train(cfg: TrainConfig):
         if cfg.verbose:
             logger.info("Saving final model checkpoint")
         torch.save({"model": agent.state_dict()}, "./checkpoint")
-    _ = evaluate(cfg, steps=steps, episode_idx=cfg.num_episodes, start_time=start_time)
+    evaluate(cfg, steps=steps, episode_idx=cfg.num_episodes, start_time=start_time)
 
-    env.close()
-    eval_env.close()
+    for env in envs:
+        env.close()
+    for eval_env in eval_envs:
+        eval_env.close()
 
 
 if __name__ == "__main__":

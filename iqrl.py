@@ -190,7 +190,7 @@ class Actor(nn.Module):
         self,
         cfg: iQRLConfig,
         obs_dim: int,
-        ctx_dim: Optional[int],
+        ctx_dim: int,
         act_dim: int,
         action_scale: float,
         action_bias: float,
@@ -380,38 +380,48 @@ class Encoder(nn.Module):
                 condition_ln=cfg.condition_ln,
             )
 
-    def get_context(self, obs: TensorDictBase) -> list[torch.Tensor]:
+    def ids_to_context(
+        self, body_ids: Optional[torch.Tensor], task_ids: Optional[torch.Tensor]
+    ) -> list[torch.Tensor]:
         """
         Returns body and task representation, if available.
         The representations will be one-hot if context_dim is None, embeddings otherwise.
         """
 
         context = []
-        body_id = obs.get("body_id")
-        task_id = obs.get("task_id")
-        if body_id is not None:
-            body_id = body_id.long().squeeze(-1).to(self.cfg.device)
-        if task_id is not None:
-            task_id = task_id.long().squeeze(-1).to(self.cfg.device)
+        if body_ids is not None:
+            body_ids = body_ids.long().squeeze(-1).to(self.cfg.device)
+        if task_ids is not None:
+            task_ids = task_ids.long().squeeze(-1).to(self.cfg.device)
 
         if self.cfg.context_dim is None:
             # Use one-hot encoding
-            if body_id is not None and self.cfg.use_embodiment_context:
-                body = nn.functional.one_hot(body_id, self.n_body).to(self.cfg.device)
+            if body_ids is not None and self.cfg.use_embodiment_context:
+                body = nn.functional.one_hot(body_ids, self.n_body)
                 context.append(body)
-            if task_id is not None:
-                task = nn.functional.one_hot(task_id, self.n_task).to(self.cfg.device)
+            if task_ids is not None:
+                task = nn.functional.one_hot(task_ids, self.n_task)
                 context.append(task)
         else:
             # Use embedding
-            if body_id is not None and self.cfg.use_embodiment_context:
-                context.append(self._body_emb(body_id).to(self.cfg.device))
-            if task_id is not None:
-                context.append(self._task_emb(task_id).to(self.cfg.device))
+            if body_ids is not None and self.cfg.use_embodiment_context:
+                context.append(self._body_emb(body_ids))
+            if task_ids is not None:
+                context.append(self._task_emb(task_ids))
 
         return context
 
-    def encode_obs(self, obs: TensorDictBase, tar: bool = False) -> TensorDictBase:
+    # def get_current_embeddings(self):  # TODO: use
+    #    body_embeddings = [self._body_emb(i) for i in range(self.n_task)]
+    #    task_embeddings = [self._body_emb(i) for i in range(self.n_task)]
+    #    return body_embeddings, task_embeddings
+
+    def encode_obs(
+        self,
+        obs: TensorDictBase,
+        ctx: list[torch.Tensor],
+        tar: bool = False,
+    ) -> TensorDictBase:
         if isinstance(obs, LazyStackedTensorDict):
             obs_tensor = obs.get_nestedtensor("state").to_padded_tensor(padding=0.0)
         else:
@@ -419,13 +429,12 @@ class Encoder(nn.Module):
         p1d = (0, self.obs_dim - obs_tensor.shape[-1])  # Don't assume inherent max obs
         obs_padded = F.pad(obs_tensor, p1d, "constant", 0.0).to(self.cfg.device)
 
-        ctx = self.get_context(obs)
         if tar:
             z = self._encoder_tar["state"](obs_padded, ctx)
         else:
             z = self._encoder["state"](obs_padded, ctx)
         td = TensorDict({"state": z}, batch_size=obs.batch_size)
-        
+
         if not self.cfg.use_obs_encoder:
             return td  # "Identity mapping"
 
@@ -575,12 +584,14 @@ class Encoder(nn.Module):
 
         with torch.set_grad_enabled(grad):
             # Prepare context of correct dimensionality and encode all actions
-            ctx = self.get_context(batch.observations)
-            ctx_t = self.get_context(batch.observations[0])
+            ctx = self.ids_to_context(body_ids=batch.body_ids, task_ids=batch.task_ids)
+            ctx_t = self.ids_to_context(
+                body_ids=batch.body_ids[0], task_ids=batch.task_ids[0]
+            )
             actions = self.encode_action(batch.actions, ctx=ctx, tar=False)
 
             # Rollout next H latent states
-            z = self.encode_obs(batch.observations[0])["codes"]
+            z = self.encode_obs(obs=batch.observations[0], ctx=ctx_t)["codes"]
             zs["codes"][0] = z
             dones = torch.zeros_like(batch.dones[0], dtype=torch.bool)
             terminateds_or_dones = torch.zeros_like(batch.dones, dtype=torch.bool)
@@ -603,7 +614,10 @@ class Encoder(nn.Module):
         return zs
 
     def metrics(self, batch: ReplayBufferSamples) -> dict:
-        z = self.encode_obs(batch.observations[0])
+        ctx_t = self.ids_to_context(
+            body_ids=batch.body_ids[0], task_ids=batch.task_ids[0]
+        )
+        z = self.encode_obs(obs=batch.observations[0], ctx=ctx_t)
 
         # Calculate rank of latent
         metrics = h.calc_rank(name="z", z=z["state"])
@@ -687,14 +701,10 @@ class iQRL(nn.Module):
         self.act_dims = [np.prod(act_spec.shape).item() for act_spec in act_specs]
         self.act_dim = max(self.act_dims)
 
-        keys = ["task_id"] if "task_id" in obs_specs[0].keys() else []
-        if "body_id" in obs_specs[0].keys() and cfg.use_embodiment_context:
-            keys.append("body_id")
-
         if cfg.context_dim is None:  # IDs will be one-hot encoded
-            ctx_dim = n_body * ("body_id" in keys) + n_task * ("task_id" in keys)
+            ctx_dim = n_body + n_task
         else:  # IDs will be embedded
-            ctx_dim = cfg.context_dim * len(keys)
+            ctx_dim = cfg.context_dim * 2  # Two embeddings: body & task
 
         ##### Calculate dimensions of (optional) latent spaces #####
         latent_obs_dim = cfg.latent_dim if cfg.use_obs_encoder else self.obs_dim
@@ -777,7 +787,12 @@ class iQRL(nn.Module):
 
         self.state_norm = None  # If cfg.normalize_states==True, will be set later
 
-    def encode_obs(self, obs: TensorDictBase, tar: bool = False) -> TensorDictBase:
+    def encode_obs(
+        self,
+        obs: TensorDictBase,
+        ctx: list[torch.Tensor],
+        tar: bool = False,
+    ) -> TensorDictBase:
         if not self.cfg.use_obs_encoder or not self.cfg.use_representation_learning:
             if isinstance(obs, LazyStackedTensorDict):
                 obs_tensor = obs.get_nestedtensor("state").to_padded_tensor(padding=0.0)
@@ -793,7 +808,7 @@ class iQRL(nn.Module):
             td.update({"codes": obs_padded})  # TODO not sure if needed
             return td
         else:
-            return self.encoder.encode_obs(obs=obs, tar=tar)
+            return self.encoder.encode_obs(obs=obs, ctx=ctx, tar=tar)
 
     def encode_action(
         self, action: torch.Tensor, ctx: list[torch.Tensor], tar: bool = False
@@ -816,6 +831,8 @@ class iQRL(nn.Module):
 
         if self.cfg.verbose and not fake:
             logger.info(f"Performing {num_updates} iQRL updates...")
+        print(f"{num_updates=}")
+
         for i in range(num_updates):
             batch = replay_buffer.sample(rb_idx=rb_idx)
 
@@ -831,7 +848,12 @@ class iQRL(nn.Module):
 
                 # Create targets
                 with torch.no_grad():
-                    zs_tar = self.encode_obs(batch.next_observations, tar=True)
+                    ctx = self.ids_to_context(
+                        body_ids=batch.body_ids, task_ids=batch.task_ids
+                    )
+                    zs_tar = self.encode_obs(
+                        obs=batch.next_observations, ctx=ctx, tar=True
+                    )
 
                 # Perform latent rollout
                 zs = self.encoder.latent_rollout(batch, grad=True)
@@ -847,7 +869,9 @@ class iQRL(nn.Module):
                     r_tar = batch.rewards
 
                     # Reward prediction
-                    ctx = self.encoder.get_context(batch.observations)
+                    ctx = self.ids_to_context(
+                        body_ids=batch.body_ids, task_ids=batch.task_ids
+                    )
                     actions = self.encode_action(batch.actions, ctx=ctx, tar=False)
                     r_pred = self.encoder.reward(
                         z=zs["codes"][:-1], a=actions, ctx=ctx
@@ -934,8 +958,10 @@ class iQRL(nn.Module):
             ##### Map observations to latent states #####
             with torch.no_grad():
                 if self.cfg.critic_next_s == "encoded":
-                    z = self.encode_obs(batch.observations, tar=False)
-                    next_z = self.encode_obs(batch.next_observations, tar=False)
+                    z = self.encode_obs(obs=batch.observations, ctx=ctx, tar=False)
+                    next_z = self.encode_obs(
+                        obs=batch.next_observations, ctx=ctx, tar=False
+                    )
                 elif self.cfg.critic_next_s == "rollout":
                     z = zs[:-1]
                     next_z = zs[1:]
@@ -953,7 +979,10 @@ class iQRL(nn.Module):
 
             # Extract current (z, a) from full batch to make Q-prediction
             z = batch.z["state"][0]
-            ctx = self.get_context(batch.observations[0])
+            # TODO?!
+            ctx = self.ids_to_context(
+                body_ids=batch.body_ids[0], task_ids=batch.task_ids[0]
+            )
             a = self.encode_action(batch.actions[0], ctx=ctx)
             q_values = self.Q(z=z, a=a, ctx=ctx, return_type="all")
 
@@ -1075,7 +1104,9 @@ class iQRL(nn.Module):
         with torch.no_grad():
             next_z = nstep_batch.next_z["state"]
             # Calculate next_a, i.e. the action that agent takes in next_z
-            ctx = self.get_context(nstep_batch.observations)
+            ctx = self.ids_to_context(
+                body_ids=nstep_batch.body_ids, task_ids=nstep_batch.task_ids
+            )
             next_a_raw, next_z_log_pi, _ = self.pi(
                 next_z,
                 ctx=ctx,
@@ -1135,7 +1166,7 @@ class iQRL(nn.Module):
         assert batch.z is not None
         z = batch.z["state"]
 
-        ctx = self.get_context(batch.observations)
+        ctx = self.ids_to_context(body_ids=batch.body_ids, task_ids=batch.task_ids)
         pi_actions, log_pi, _ = self.pi(
             z=z, ctx=ctx, act_mask=batch.observations["act_mask"], eval_mode=True
         )
@@ -1195,32 +1226,36 @@ class iQRL(nn.Module):
     def set_state_norm(self, state_norm: dict):
         self.state_norm = state_norm  # (body_id, task_id)->(mean, std)
 
-    def get_context(self, obs: TensorDictBase) -> list[torch.Tensor]:
+    def ids_to_context(
+        self, body_ids: Optional[torch.Tensor], task_ids: Optional[torch.Tensor]
+    ) -> list[torch.Tensor]:
         """
         Returns body and task representation, if available.
         The representations will be one-hot if context_dim is None, embeddings otherwise.
         One-hot is used by default if representation learning is disabled.
         """
         if self.cfg.use_representation_learning:
-            return self.encoder.get_context(obs)
+            return self.encoder.ids_to_context(body_ids=body_ids, task_ids=task_ids)
         else:
             context = []
-            body_id = obs.get("body_id")
-            if body_id is not None:
-                body_id = body_id.long().squeeze(-1).to(self.cfg.device)
-                body = nn.functional.one_hot(body_id, self.n_body).to(self.cfg.device)
-                context.append(body)
-            task_id = obs.get("task_id")
-            if task_id is not None:
-                task_id = task_id.long().squeeze(-1).to(self.cfg.device)
-                task = nn.functional.one_hot(task_id, self.n_task).to(self.cfg.device)
-                context.append(task)
+            if body_ids is not None and self.cfg.use_embodiment_context:
+                body_ids = body_ids.long().squeeze(-1).to(self.cfg.device)
+                body_ids = nn.functional.one_hot(body_ids, self.n_body)
+                context.append(body_ids)
+            if task_ids is not None:
+                task_ids = task_ids.long().squeeze(-1).to(self.cfg.device)
+                task_ids = nn.functional.one_hot(task_ids, self.n_task)
+                context.append(task_ids)
 
             return context
 
     @torch.no_grad()
     def select_action(
-        self, obs: TensorDictBase, eval_mode: bool = False
+        self,
+        obs: TensorDictBase,
+        body_id: Optional[torch.Tensor],
+        task_id: Optional[torch.Tensor],
+        eval_mode: bool = False,
     ) -> torch.Tensor:
         if self.cfg.normalize_states and self.state_norm is not None:
             # Normalize states (no need to pad though; this will be done by the encoder)
@@ -1232,8 +1267,6 @@ class iQRL(nn.Module):
             normalized_states = []
             num_states = state.size(0)  # This works for both tensor and nested tensor
             for i in range(num_states):
-                body_id = np.argmax(obs["body_id"][i]).item()
-                task_id = np.argmax(obs["task_id"][i]).item()
                 mean, std = self.state_norm[(body_id, task_id)]
                 normalized_states.append((state[i] - mean) / std)
             if use_nested_tensor:
@@ -1246,18 +1279,22 @@ class iQRL(nn.Module):
             obs = obs.view(1)
             is_flat_obs = True
 
-        s = self.encode_obs(obs, tar=False).to(torch.float)
-        ctx = self.get_context(obs)
+        ctx = self.ids_to_context(body_ids=body_id, task_ids=task_id)
+        s = self.encode_obs(obs=obs, ctx=ctx, tar=False).to(torch.float)
         a, _, mean = self.pi(
-            s["state"], ctx, act_mask=obs["act_mask"], tar=False, eval_mode=eval_mode
+            z=s["state"],
+            ctx=ctx,
+            act_mask=obs["act_mask"],
+            tar=False,
+            eval_mode=eval_mode,
         )
         if eval_mode and self.cfg.rl_algo == "SAC":
             a = mean
 
         # NOTE: It's not enough to set unused dims to 0, we cut them appropriately below
         if is_flat_obs:
-            body_id = obs["body_id"][0].item()
-            task_id = obs["task_id"][0].item()
+            body_id = body_id[0].item()
+            task_id = task_id[0].item()
             act_dim = self.ids_to_dims[(body_id, task_id)][1]
             return a[0][:act_dim]
         else:
