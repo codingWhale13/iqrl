@@ -1,0 +1,10 @@
+# @package _global_
+defaults:
+  - medium
+  - _self_
+
+envs:
+  - ["swimmer", "swimmer3"]
+  - ["swimmer", "swimmer6"]
+  - ["swimmer", "swimmer10"]
+  - ["swimmer", "swimmer15"]

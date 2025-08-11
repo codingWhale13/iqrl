@@ -90,7 +90,7 @@ def make_env(
             pixels_only=pixels_only,
             device=device,
         )
-    elif (env_name, task_name) in suite.ALL_TASKS or env_name == "cup":
+    elif (env_name, task_name) in suite.ALL_TASKS or env_name in ["cup", "swimmer"]:
         env = dmcontrol_make_env(
             env_name=env_name,
             task_name=task_name,
