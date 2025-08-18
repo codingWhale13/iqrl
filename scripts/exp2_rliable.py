@@ -20,9 +20,12 @@ RLIABLE_REPS = 50000
 MAX_RETURN_ALL = {
     benchmark: 500 if benchmark == "Tricky-3" else 1000 for benchmark in BENCHMARKS_ALL
 }
-XLABEL_Y_COORD_MEAN = -0.6
 XLABEL_Y_COORD_PER_TASK = -0.7
+XLABEL_Y_COORD_PER_BENCHMARK = -0.6
 SAVE_CSV = False
+PLOT_IQM_PER_TASK = False  # No need, this is what exp2_exp_3 is for
+
+metric_name_pi = f"P(MultiQRL>MT-TD3)"  # Name to show for probability of improvement
 
 # Map consistently from names to colors from https://sashamaps.net/docs/resources/20-colors/
 COLORS15_RGB = {
@@ -44,6 +47,7 @@ COLORS15_RGB = {
     "W/ one-hot": (240, 50, 230),  # Magenta
     "W/o body info": (128, 0, 0),  # Maroon
     "W/ one-hot & w/o body info": (145, 30, 180),  # Purple
+    metric_name_pi: (222, 188, 153),  # Apricot but made darker -> more visible
 }
 colors = {k: (r / 255, g / 255, b / 255) for k, (r, g, b) in COLORS15_RGB.items()}
 
@@ -224,6 +228,8 @@ BENCHMARKS_ALL = ["Walker-All", "Spin-Dog", "Fortunate-5", "Tricky-3", "Final-4"
 # Calculate the IQMs for each benchmark and create per-task plots right away
 mt_aggregate_scores = {}
 mt_aggregate_cis = {}
+mt_pi_scores = {}
+mt_pi_scores_ci = {}
 for benchmark in BENCHMARKS_ALL:
     st_metrics = ST_METRICS_ALL[benchmark]
     max_return = MAX_RETURN_ALL[benchmark]
@@ -233,6 +239,27 @@ for benchmark in BENCHMARKS_ALL:
     # === Fetch and normalize ===
     raw_scores = collect_scores(mt_run_ids, mt_metric)
     normalized_scores = {k: v / max_return for k, v in raw_scores.items()}
+
+    # === Compute PIs (probabilitis of improvement) ===
+    pi_key = "MultiQRL,MT-TD3"
+    xy = {pi_key: (normalized_scores["MultiQRL"], normalized_scores["MT-TD3"])}
+    pi, pi_cis = rly.get_interval_estimates(
+        xy, metrics.probability_of_improvement, reps=RLIABLE_REPS
+    )
+
+    # Save MT results for later (want to plot PIs for each benchmark side by side)
+    if len(mt_pi_scores.keys()) == 0:
+        for k in pi.keys():
+            mt_pi_scores[k] = [pi[k]]
+            mt_pi_scores_ci[k] = [
+                [pi_cis[k][0]],
+                [pi_cis[k][1]],
+            ]
+    else:
+        for k in pi.keys():
+            mt_pi_scores[k].append(pi[k])
+            mt_pi_scores_ci[k][0].append(pi_cis[k][0])
+            mt_pi_scores_ci[k][1].append(pi_cis[k][1])
 
     # === Compute aggregate metrics ===
     aggregate_scores, aggregate_cis = rly.get_interval_estimates(
@@ -303,50 +330,80 @@ for benchmark in BENCHMARKS_ALL:
         st_aggregate_cis[k] = np.array(st_aggregate_cis[k])
 
     # === Plot per-task IQM ===
-    fig, axes = plot_utils.plot_interval_estimates(
-        st_aggregate_scores,
-        st_aggregate_cis,
-        metric_names=per_task_metric_names,
-        algorithms=mt_algos[::-1],  # Show in "correct" order
-        xlabel_y_coordinate=XLABEL_Y_COORD_PER_TASK,
-        xlabel=f"Normalized Return per {benchmark} Environment",
-        colors=colors,
-    )
+    if PLOT_IQM_PER_TASK:
+        fig, axes = plot_utils.plot_interval_estimates(
+            st_aggregate_scores,
+            st_aggregate_cis,
+            metric_names=per_task_metric_names,
+            algorithms=mt_algos[::-1],  # Show in "correct" order
+            xlabel_y_coordinate=XLABEL_Y_COORD_PER_TASK,
+            xlabel=f"Normalized Return per {benchmark} Environment",
+            colors=colors,
+        )
 
-    # Indicate "optimal" value (max iQRL return)
-    for i, ax in enumerate(axes):
-        metric_key = ".".join(st_metrics[i][0])
-        task = st_metrics[i][1]
-        max_score = 0
-        for run_id in iqrl_ids[task]:
-            run = wandb_api.run(f"{ENTITY_AND_PROJECT}/{run_id}")
-            history = run.history(samples=9999)  # Make sure we get everything
-            max_score = max(max_score, history[metric_key].dropna().max())
-        max_score /= max_return
-        ax.axvline(x=max_score, color="black", linewidth=1.5, linestyle=":")
-        ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=3))  # Avoid plot overlap
+        # Indicate "optimal" value (max iQRL return)
+        for i, ax in enumerate(axes):
+            metric_key = ".".join(st_metrics[i][0])
+            task = st_metrics[i][1]
+            max_score = 0
+            for run_id in iqrl_ids[task]:
+                run = wandb_api.run(f"{ENTITY_AND_PROJECT}/{run_id}")
+                history = run.history(samples=9999)  # Make sure we get everything
+                max_score = max(max_score, history[metric_key].dropna().max())
+            max_score /= max_return
+            ax.axvline(x=max_score, color="black", linewidth=1.5, linestyle=":")
+            ax.xaxis.set_major_locator(
+                mticker.MaxNLocator(nbins=3)
+            )  # Avoid plot overlap
 
-    save_fig(
-        fig, os.path.join(OUT_DIR, EXPERIMENT, f"{EXPERIMENT}_{benchmark}_per-task")
-    )
+        save_fig(
+            fig, os.path.join(OUT_DIR, EXPERIMENT, f"{EXPERIMENT}_{benchmark}_per-task")
+        )
 
 
-# === Finally, plot IQM vs. MT-TD3 (1 subplot per benchmark) ===
+# === Plot PI of MultiQRL vs. MT-TD3 (1 subplot per benchmark) ===
+# We're misuing the plotting functionality here, but it makes sense for our purposes:
 
+# === Plot IQM of MultiQRL vs. MT-TD3 as well as PI (1 subplot per benchmark) ===
 for k in mt_aggregate_scores.keys():
     mt_aggregate_scores[k] = np.array(mt_aggregate_scores[k])
     mt_aggregate_cis[k] = np.array(mt_aggregate_cis[k])
+
+# Replace keys to show that rows are about IQM (to differentiate against PI)
+old_keys = list(mt_aggregate_scores.keys())
+mt_algos_new_names = []
+for old_key in old_keys:
+    new_key = f"{old_key}: IQM"
+    mt_algos_new_names.append(new_key)
+    mt_aggregate_scores[new_key] = mt_aggregate_scores[old_key]
+    mt_aggregate_cis[new_key] = mt_aggregate_cis[old_key]
+    del mt_aggregate_scores[old_key]
+    del mt_aggregate_cis[old_key]
+    colors[new_key] = colors[old_key]
+
+for k in mt_pi_scores.keys():
+    mt_pi_scores[k] = np.array(mt_pi_scores[k])
+    mt_pi_scores_ci[k] = np.array(mt_pi_scores_ci[k])
+# Make PI metric more readable
+old_key = list(mt_pi_scores.keys())[0]  # Something like "MultiQRL,MT-TD3"
+mt_pi_scores[metric_name_pi] = mt_pi_scores[old_key]
+mt_pi_scores_ci[metric_name_pi] = mt_pi_scores_ci[old_key]
+del mt_pi_scores[old_key]
+del mt_pi_scores_ci[old_key]
+
 fig, axes = plot_utils.plot_interval_estimates(
-    mt_aggregate_scores,
-    mt_aggregate_cis,
-    metric_names=[f"IQM {benchmark}" for benchmark in BENCHMARKS_ALL],
-    algorithms=mt_algos[::-1],  # Show in "correct" order
-    xlabel_y_coordinate=-0.8,
+    {**mt_aggregate_scores, **mt_pi_scores},
+    {**mt_aggregate_cis, **mt_pi_scores_ci},
+    metric_names=BENCHMARKS_ALL,
+    algorithms=(mt_algos_new_names + [metric_name_pi])[::-1],  # Show in "correct" order
+    xlabel_y_coordinate=XLABEL_Y_COORD_PER_BENCHMARK,
     xlabel="Comparison of Normalized Mean Returns Across Environments",
     colors=colors,
 )
-
-for ax in axes:
-    ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=3))  # Avoid plot overlap
+for i, ax in enumerate(axes):  # Avoid plot overlap
+    if i == 2:
+        ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=2))
+    else:
+        ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=3))
 
 save_fig(fig, os.path.join(OUT_DIR, EXPERIMENT, f"{EXPERIMENT}_per-benchmark"))

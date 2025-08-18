@@ -41,8 +41,8 @@ class iQRLConfig:
     condition_reward: bool = True
     """When conditioning a component, concatenate context to which layer's input?"""
     condition_layer: str = "first"  # or "all"
-    """When conditioning a layer, also concatenate context to LayerNorm input?"""
-    condition_ln: bool = False
+    """(How to) condition a layer? "cln" and "FiLM" use body and task context while None, "ln", and "aln" don't"""
+    norm_mode: str = "cln"  # Use LayerNorm with concatenated context as default
     """MLP dims for actor/critic/dynamics"""
     mlp_dims: List[int] = field(default_factory=lambda: [512, 512])
     """Learning rate for actor/critic"""
@@ -205,7 +205,7 @@ class Actor(nn.Module):
             out_dim=act_dim if cfg.rl_algo == "TD3" else act_dim * 2,  # SAC -> 2 heads
             ctx_dim=ctx_dim,
             condition_layer=cfg.condition_layer if cfg.condition_actor else None,
-            condition_ln=cfg.condition_ln,
+            norm_mode=cfg.norm_mode,
         )
 
     def forward(
@@ -249,7 +249,7 @@ class Critic(nn.Module):
                 out_dim=1 if self.cfg.Q_and_rew_loss == "mse" else cfg.num_bins,
                 ctx_dim=ctx_dim,
                 condition_layer=cfg.condition_layer if cfg.condition_critic else None,
-                condition_ln=cfg.condition_ln,
+                norm_mode=cfg.norm_mode,
                 dropout=cfg.q_dropout,
             ).to(cfg.device)
             for _ in range(cfg.num_critics)
@@ -334,7 +334,7 @@ class Encoder(nn.Module):
                 out_dim=latent_obs_dim,
                 ctx_dim=ctx_dim,
                 condition_layer=cfg.condition_layer if cfg.condition_encoders else None,
-                condition_ln=cfg.condition_ln,
+                norm_mode=cfg.norm_mode,
                 dropout=cfg.enc_dropout,
                 act_fn=h.SimNorm(cfg) if cfg.use_simnorm else None,
             )
@@ -345,7 +345,7 @@ class Encoder(nn.Module):
                 out_dim=latent_act_dim,
                 ctx_dim=ctx_dim,
                 condition_layer=cfg.condition_layer if cfg.condition_encoders else None,
-                condition_ln=cfg.condition_ln,
+                norm_mode=cfg.norm_mode,
                 dropout=cfg.enc_dropout,
                 act_fn=h.SimNorm(cfg) if cfg.use_simnorm else None,
             )
@@ -365,7 +365,7 @@ class Encoder(nn.Module):
             out_dim=trans_out_dim,
             ctx_dim=ctx_dim,
             condition_layer=cfg.condition_layer if cfg.condition_dynamics else None,
-            condition_ln=cfg.condition_ln,
+            norm_mode=cfg.norm_mode,
             act_fn=h.SimNorm(cfg) if cfg.use_simnorm else None,
         )
 
@@ -377,7 +377,7 @@ class Encoder(nn.Module):
                 out_dim=1 if cfg.Q_and_rew_loss == "mse" else cfg.num_bins,
                 ctx_dim=ctx_dim,
                 condition_layer=cfg.condition_layer if cfg.condition_reward else None,
-                condition_ln=cfg.condition_ln,
+                norm_mode=cfg.norm_mode,
             )
 
     def get_context(self, obs: TensorDictBase) -> list[torch.Tensor]:

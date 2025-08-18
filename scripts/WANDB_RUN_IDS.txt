@@ -680,3 +680,5 @@ iqrl-2025-05-21_17-05-19 (tricky-3 final J (seed 5+)) => 4y5e5qfy
 iqrl-2025-05-21_17-05-19 (tricky-3 final J (seed 5+)) => ine2lewe
 iqrl-2025-05-21_17-05-19 (tricky-3 final J (seed 5+)) => n273wvjn
 iqrl-2025-05-21_17-05-19 (tricky-3 final J (seed 5+)) => pae3ge51
+iqrl-2025-06-06_10-27-58 (5 CPUs) => mdzbgbvx
+iqrl-2025-06-06_11-29-56 (1 CPU) => bnnuoank

@@ -19,91 +19,6 @@ def soft_update_params(model, model_target, tau: float):
             # params_target.data.copy_(tau * params.data + (1 - tau) * params_target.data)
 
 
-class ContextSequential(nn.Sequential):
-    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]):
-        for module in self:
-            x = module(x, ctx)
-        return x
-
-
-def mlp(
-    in_dim: int,
-    mlp_dims: Union[int, list[int]],
-    out_dim: int,
-    ctx_dim: int = 0,
-    condition_layer: Optional[str] = None,  # None or "first" or "all"
-    condition_ln: bool = False,
-    act_fn=None,
-    dropout=0.0,
-    norm_mode: str = "ln",
-    norm_after_act: bool = False,
-):
-    """
-    MLP with LayerNorm, Mish activations, and optionally dropout.
-
-    Adapted from https://github.com/tdmpc2/tdmpc2-eval/blob/main/helper.py
-
-    If both ctx_dim and condition are specified:
-    - in_dim increases by ctx_dim, if condition in ["first", "all"]
-    - all mlp_dims increase by ctx_dim, if condition == "all"
-    """
-    if isinstance(mlp_dims, int):
-        mlp_dims = [mlp_dims]
-
-    dims = [int(in_dim)] + mlp_dims + [int(out_dim)]
-    mlp = nn.ModuleList()
-    mlp.append(
-        NormedLinear(
-            dims[0],
-            dims[1],
-            ctx_dim=ctx_dim if condition_layer in ["first", "all"] else None,
-            condition_ln=condition_ln,
-            dropout=dropout,
-            norm_mode=norm_mode,
-            norm_after_act=norm_after_act,
-        )
-    )
-
-    add_to_next_in_dim = 0  # Conditioning LayerNorm changes outgoing dims of layers
-    if condition_layer in ["first", "all"] and condition_ln:
-        add_to_next_in_dim = ctx_dim
-
-    for i in range(1, len(dims) - 2):
-        mlp.append(
-            NormedLinear(
-                dims[i] + add_to_next_in_dim,
-                dims[i + 1],
-                ctx_dim=ctx_dim if condition_layer == "all" else None,
-                condition_ln=condition_ln,
-                norm_mode=norm_mode,
-                norm_after_act=norm_after_act,
-            )
-        )
-        if condition_layer == "all" and condition_ln:
-            add_to_next_in_dim = ctx_dim
-        else:
-            add_to_next_in_dim = 0
-
-    mlp.append(
-        NormedLinear(
-            dims[-2] + add_to_next_in_dim,
-            dims[-1],
-            ctx_dim=ctx_dim if condition_layer == "all" else None,
-            condition_ln=condition_ln,
-            act=act_fn,
-            norm_mode=norm_mode,
-            norm_after_act=norm_after_act,
-        )
-        if act_fn
-        else ContextLinear(
-            in_features=dims[-2] + add_to_next_in_dim,
-            out_features=dims[-1],
-            ctx_dim=ctx_dim if condition_layer == "all" else None,
-        )
-    )
-    return ContextSequential(*mlp)
-
-
 class FSQ(_FSQ):
     """
     Finite Scalar Quantization
@@ -153,18 +68,11 @@ class ContextLinear(nn.Linear):
     Linear layer which can use context as a second input, if desired.
     """
 
-    def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        ctx_dim: Optional[int],
-        *args,
-        **kwargs,
-    ):
-        self.use_ctx = ctx_dim is not None
+    def __init__(self, in_dim: int, out_dim: int, ctx_dim: int = 0, *args, **kwargs):
+        self.use_ctx = ctx_dim > 0
         if self.use_ctx:
-            in_features += ctx_dim
-        super().__init__(in_features, out_features, *args, **kwargs)
+            in_dim += ctx_dim
+        super().__init__(in_dim, out_dim, *args, **kwargs)
 
     def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]):
         if self.use_ctx:
@@ -172,76 +80,13 @@ class ContextLinear(nn.Linear):
         return super().forward(x)
 
 
-class NormedLinear(ContextLinear):
-    """
-    Linear layer with LayerNorm, Mish activation, and optionally dropout.
-
-    Adapted from https://github.com/tdmpc2/tdmpc2-eval/blob/main/helper.py
-
-    Optionally, conditioning on context can be used. If ctx_dim is not None:
-    - The context will be concatenated to the input of the linear layer and
-    - The context will be concatenated to the input of the LayerNorm layer.
-    """
-
-    def __init__(
-        self,
-        *args,
-        ctx_dim: Optional[int] = None,
-        condition_ln: bool = False,
-        dropout=0.0,
-        act=nn.Mish(inplace=True),
-        norm_mode: Optional[str] = "ln",  # "ln" or "bn" or "brn" or None
-        norm_after_act: bool = True,
-        **kwargs,
-    ):
-        super().__init__(*args, ctx_dim=ctx_dim, **kwargs)
-        if norm_mode == "bn":
-            assert ctx_dim is None, "Not implemented"
-            self.norm = nn.BatchNorm1d(self.out_features)
-        elif norm_mode == "brn":
-            assert ctx_dim is None, "Not implemented"
-            self.norm = BatchRenorm1d(self.out_features)
-        elif norm_mode == "ln":
-            ctx_dim_ln = ctx_dim if condition_ln else None
-            self.norm = ContextLayerNorm(self.out_features, ctx_dim=ctx_dim_ln)
-        elif norm_mode is None:
-            assert ctx_dim is None, "Not implemented"
-            self.norm = lambda x: x
-        else:
-            raise NotImplementedError(
-                f"norm_mode should be 'ln', 'bn', 'brn' or None, not {norm_mode}"
-            )
-
-        self.norm_after_act = norm_after_act
-        self.act = act
-        self.dropout = nn.Dropout(dropout, inplace=True) if dropout else None
-        self.ctx_dim = ctx_dim
-
-    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]):
-        x = super().forward(x, ctx)
-        if self.dropout:
-            x = self.dropout(x)
-        if self.norm_after_act:
-            return self.norm(self.act(x), ctx)
-        else:
-            return self.act(self.norm(x, ctx))
-
-    def __repr__(self):
-        repr_dropout = f", dropout={self.dropout.p}" if self.dropout else ""
-        return f"NormedLinear(in_features={self.in_features}, \
-        out_features={self.out_features}, \
-        ctx_dim={self.ctx_dim}, \
-        bias={self.bias is not None}{repr_dropout}, \
-        act={self.act.__class__.__name__})"
-
-
 class ContextLayerNorm(nn.LayerNorm):
     """
-    LayerNorm layer which can use context as a second input, if desired.
+    LayerNorm which can use context as a second input, if desired.
     """
 
-    def __init__(self, normalized_shape: int, ctx_dim: Optional[int], *args, **kwargs):
-        self.use_ctx = ctx_dim is not None
+    def __init__(self, normalized_shape: int, ctx_dim: int = 0, *args, **kwargs):
+        self.use_ctx = ctx_dim > 0
         if self.use_ctx:
             normalized_shape += ctx_dim
         super().__init__(normalized_shape=normalized_shape, *args, **kwargs)
@@ -249,8 +94,187 @@ class ContextLayerNorm(nn.LayerNorm):
     def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]):
         if self.use_ctx:
             x = torch.cat(ctx + [x], -1)
-        x = super().forward(x)
+        return super().forward(x)
+
+
+class AdaptiveLayerNorm(nn.Module):
+    """
+    Adaptive LayerNorm a.k.a. AdaNorm, as introduced by Xu (2019).
+    Adapted from https://github.com/lancopku/AdaNorm/tree/master/machine%20translation/fairseq/modules/layer_norm.py
+    """
+
+    def __init__(self, eps=1e-5, adanorm_scale=1, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.adanorm_scale = adanorm_scale
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor, _: list[torch.Tensor]):
+        mean = x.mean(-1, keepdim=True)
+        std = x.std(-1, keepdim=True)
+        x = x - mean
+        mean = x.mean(-1, keepdim=True)
+        graNorm = (1 / 10 * (x - mean) / (std + self.eps)).detach()
+        x_norm = (x - x * graNorm) / (std + self.eps)
+
+        return x_norm * self.adanorm_scale
+
+
+class NormedLinear(ContextLinear):
+    """
+    Linear layer with optional normalization.
+    Uses Mish activation by default, and optionally uses dropout.
+
+    Adapted from https://github.com/tdmpc2/tdmpc2-eval/blob/main/helper.py
+
+    If ctx_dim > 0, we concatenate the context to the input of the linear layer.
+    If norm_mode is cln, aln, or FiLM, the normalization also gets context-conditioned.
+    """
+
+    def __init__(
+        self,
+        *args,
+        ctx_dim: int = 0,
+        dropout=0.0,
+        norm_mode: Optional[str] = None,  # None, "ln", "cln", "aln", or "FiLM"
+        act_fn=nn.Mish(inplace=True),
+        norm_after_act: bool = True,
+        **kwargs,
+    ):
+        super().__init__(*args, ctx_dim=ctx_dim, **kwargs)
+        self.ctx_dim = ctx_dim
+        self.dropout = nn.Dropout(dropout, inplace=True) if dropout else None
+        self.norm_mode = norm_mode
+        if norm_mode == "ln":  # LayerNorm, no context-conditioning
+            self.norm = ContextLayerNorm(self.out_features, ctx_dim=0)
+        elif norm_mode == "aln":  # Adaptive LayerNorm, no context-conditioning
+            self.norm = AdaptiveLayerNorm(self.out_features)
+        elif norm_mode == "cln":  # LayerNorm, conditioned on context by concatenation
+            self.norm = ContextLayerNorm(self.out_features, ctx_dim=ctx_dim)
+        elif norm_mode == "FiLM":  # FiLM
+            raise ValueError("TODO: implement FiLM")
+            self.norm = ContextLayerNorm(self.out_features, ctx_dim=ctx_dim)
+        elif norm_mode is None:
+            self.norm = lambda x, _: x  # Ignore context (second argument)
+        else:
+            raise NotImplementedError(
+                f"norm_mode can be None, 'ln', 'cln', 'aln', or 'FiLM', not {norm_mode}"
+            )
+        self.act_fn = act_fn
+        self.norm_after_act = norm_after_act
+
+    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]):
+        x = super().forward(x, ctx)
+        if self.dropout:
+            x = self.dropout(x)
+        if self.norm_after_act:
+            return self.norm(self.act_fn(x), ctx)
+        else:
+            return self.act_fn(self.norm(x, ctx))
+
+    def __repr__(self):
+        repr_dropout = f", dropout={self.dropout.p}" if self.dropout else ""
+        if self.norm_mode is None:
+            norm_mode = "Identity"
+        elif self.norm_mode == "ln":
+            norm_mode = "LayerNorm"
+        elif self.norm_mode == "cln":
+            norm_mode = "ConcatLayerNorm"
+        elif self.norm_mode == "aln":
+            norm_mode = "AdaptiveLayerNorm"
+        elif self.norm_mode == "FiLM":
+            norm_mode = "FiLM"
+        else:
+            norm_mode = "UnknownNorm"
+        return f"{norm_mode}(in_features={self.in_features}, \
+        out_features={self.out_features}, \
+        ctx_dim={self.ctx_dim}, \
+        bias={self.bias is not None}{repr_dropout}, \
+        act={self.act_fn.__class__.__name__})"
+
+
+class ContextSequential(nn.Sequential):
+    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]):
+        for module in self:
+            x = module(x, ctx)
         return x
+
+
+def mlp(
+    in_dim: int,
+    mlp_dims: Union[int, list[int]],
+    out_dim: int,
+    ctx_dim: int = 0,
+    dropout=0.0,
+    condition_layer: Optional[str] = None,  # None, "first", or "all"
+    norm_mode: Optional[str] = None,  # None, "ln", "cln", "aln", or "FiLM"
+    act_fn=None,
+    norm_after_act: bool = False,
+):
+    """
+    MLP with Mish activations and optionally:
+    - Use dropout in first layer.
+    - Use normalization in hidden layer.
+
+    Adapted from https://github.com/tdmpc2/tdmpc2-eval/blob/main/helper.py
+
+    If ctx_dim>0, the specified layers get context-conditioned by concatenation:
+    - The in_dim increases by ctx_dim, if condition in ["first", "all"].
+    - All mlp_dims increase by ctx_dim, if condition == "all".
+    """
+    if isinstance(mlp_dims, int):
+        mlp_dims = [mlp_dims]
+
+    use_cln = norm_mode == "cln"
+    dims = [int(in_dim)] + mlp_dims + [int(out_dim)]
+    mlp = nn.ModuleList()
+
+    # Add input layer
+    mlp.append(
+        NormedLinear(
+            dims[0],
+            dims[1],
+            ctx_dim=ctx_dim if condition_layer in ["first", "all"] else 0,
+            dropout=dropout,
+            norm_mode=norm_mode,
+            norm_after_act=norm_after_act,
+        )
+    )
+    add_to_in_dim = 0  # Conditioning LayerNorm changes outgoing dims of layers
+    if condition_layer in ["first", "all"] and use_cln:
+        add_to_in_dim = ctx_dim
+
+    # Add hidden layer(s)
+    for i in range(1, len(dims) - 2):
+        mlp.append(
+            NormedLinear(
+                dims[i] + add_to_in_dim,
+                dims[i + 1],
+                ctx_dim=ctx_dim if condition_layer == "all" else 0,
+                norm_mode=norm_mode,
+                norm_after_act=norm_after_act,
+            )
+        )
+        add_to_in_dim = ctx_dim if (condition_layer == "all" and use_cln) else 0
+
+    # Add output layer
+    mlp.append(
+        NormedLinear(
+            dims[-2] + add_to_in_dim,
+            dims[-1],
+            ctx_dim=ctx_dim if condition_layer == "all" else 0,
+            norm_mode=norm_mode,
+            act_fn=act_fn,
+            norm_after_act=norm_after_act,
+        )
+        if act_fn is not None
+        else ContextLinear(
+            in_dim=dims[-2] + add_to_in_dim,
+            out_dim=dims[-1],
+            ctx_dim=ctx_dim if condition_layer == "all" else 0,
+        )
+    )
+
+    return ContextSequential(*mlp)
 
 
 class Ensemble(nn.Module):
