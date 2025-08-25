@@ -74,7 +74,7 @@ class ContextLinear(nn.Linear):
             in_dim += ctx_dim
         super().__init__(in_dim, out_dim, *args, **kwargs)
 
-    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]):
+    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]) -> torch.Tensor:
         if self.use_ctx:
             x = torch.cat(ctx + [x], -1)
         return super().forward(x)
@@ -91,13 +91,13 @@ class ContextLayerNorm(nn.LayerNorm):
             normalized_shape += ctx_dim
         super().__init__(normalized_shape=normalized_shape, *args, **kwargs)
 
-    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]):
+    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]) -> torch.Tensor:
         if self.use_ctx:
             x = torch.cat(ctx + [x], -1)
         return super().forward(x)
 
 
-class AdaptiveLayerNorm(nn.Module):
+class AdaptiveLayerNormOriginal(nn.Module):
     """
     Adaptive LayerNorm a.k.a. AdaNorm, as introduced by Xu (2019).
     Adapted from https://github.com/lancopku/AdaNorm/tree/master/machine%20translation/fairseq/modules/layer_norm.py
@@ -108,7 +108,7 @@ class AdaptiveLayerNorm(nn.Module):
         self.adanorm_scale = adanorm_scale
         self.eps = eps
 
-    def forward(self, x: torch.Tensor, _: list[torch.Tensor]):
+    def forward(self, x: torch.Tensor, _: list[torch.Tensor]) -> torch.Tensor:
         mean = x.mean(-1, keepdim=True)
         std = x.std(-1, keepdim=True)
         x = x - mean
@@ -119,10 +119,48 @@ class AdaptiveLayerNorm(nn.Module):
         return x_norm * self.adanorm_scale
 
 
-class NormedLinear(ContextLinear):
+class AdaptiveLayerNorm(nn.Module):
     """
-    Linear layer with optional normalization.
-    Uses Mish activation by default, and optionally uses dropout.
+    Conditional / Adaptive LayerNorm.
+    y = (LN(x, affine=False)) * gamma(ctx) + beta(ctx).
+    Adapted from https://github.com/eloialonso/diamond/blob/main/src/models/blocks.py
+
+    We replace bias and gain of LayerNorm by linear layers, mapping ctx_dim -> layer_dim
+    NOTE: This is closer to the implementation of LayerNorm than the one of AdaNorm.
+    """
+
+    def __init__(self, in_dim: int, ctx_dim: int, eps=1e-5, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.ln = nn.LayerNorm(in_dim, eps=eps, elementwise_affine=False)  # No params
+        self.linear = nn.Linear(ctx_dim, in_dim * 2)
+
+    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]) -> torch.Tensor:
+        x_norm = self.ln(x)
+        scale, shift = self.linear(torch.cat(ctx, -1)).chunk(2, dim=-1)
+
+        return x_norm * (1 + scale) + shift
+
+
+class FiLM(nn.Module):
+    """
+    Learning scale and bias based on context. No normalization.
+    """
+
+    def __init__(self, in_dim: int, ctx_dim: int, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.linear = nn.Linear(ctx_dim, in_dim * 2)
+
+    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]) -> torch.Tensor:
+        scale, shift = self.linear(torch.cat(ctx, -1)).chunk(2, dim=-1)
+        return x * (1 + scale) + shift
+
+
+class NormedContextLinear(ContextLinear):
+    """
+    Linear layer, allowing:
+    - Context to be concatenated to input tensor.
+    - Normalization of the activations.
+    Uses Mish activation by default, and optionally dropout.
 
     Adapted from https://github.com/tdmpc2/tdmpc2-eval/blob/main/helper.py
 
@@ -147,12 +185,11 @@ class NormedLinear(ContextLinear):
         if norm_mode == "ln":  # LayerNorm, no context-conditioning
             self.norm = ContextLayerNorm(self.out_features, ctx_dim=0)
         elif norm_mode == "aln":  # Adaptive LayerNorm, no context-conditioning
-            self.norm = AdaptiveLayerNorm(self.out_features)
+            self.norm = AdaptiveLayerNorm(self.out_features, ctx_dim)
         elif norm_mode == "cln":  # LayerNorm, conditioned on context by concatenation
             self.norm = ContextLayerNorm(self.out_features, ctx_dim=ctx_dim)
         elif norm_mode == "FiLM":  # FiLM
-            raise ValueError("TODO: implement FiLM")
-            self.norm = ContextLayerNorm(self.out_features, ctx_dim=ctx_dim)
+            self.norm = FiLM(self.out_features, ctx_dim=ctx_dim)
         elif norm_mode is None:
             self.norm = lambda x, _: x  # Ignore context (second argument)
         else:
@@ -162,7 +199,7 @@ class NormedLinear(ContextLinear):
         self.act_fn = act_fn
         self.norm_after_act = norm_after_act
 
-    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]):
+    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]) -> torch.Tensor:
         x = super().forward(x, ctx)
         if self.dropout:
             x = self.dropout(x)
@@ -193,7 +230,7 @@ class NormedLinear(ContextLinear):
 
 
 class ContextSequential(nn.Sequential):
-    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]):
+    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]) -> torch.Tensor:
         for module in self:
             x = module(x, ctx)
         return x
@@ -230,7 +267,7 @@ def mlp(
 
     # Add input layer
     mlp.append(
-        NormedLinear(
+        NormedContextLinear(
             dims[0],
             dims[1],
             ctx_dim=ctx_dim if condition_layer in ["first", "all"] else 0,
@@ -246,7 +283,7 @@ def mlp(
     # Add hidden layer(s)
     for i in range(1, len(dims) - 2):
         mlp.append(
-            NormedLinear(
+            NormedContextLinear(
                 dims[i] + add_to_in_dim,
                 dims[i + 1],
                 ctx_dim=ctx_dim if condition_layer == "all" else 0,
@@ -258,7 +295,7 @@ def mlp(
 
     # Add output layer
     mlp.append(
-        NormedLinear(
+        NormedContextLinear(
             dims[-2] + add_to_in_dim,
             dims[-1],
             ctx_dim=ctx_dim if condition_layer == "all" else 0,

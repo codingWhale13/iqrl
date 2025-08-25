@@ -42,7 +42,7 @@ class iQRLConfig:
     """When conditioning a component, concatenate context to which layer's input?"""
     condition_layer: str = "first"  # or "all"
     """(How to) condition a layer? "cln" and "FiLM" use body and task context while None, "ln", and "aln" don't"""
-    norm_mode: str = "cln"  # Use LayerNorm with concatenated context as default
+    norm_mode: Optional[str] = "cln"  # Default: LayerNorm with concatenated context
     """MLP dims for actor/critic/dynamics"""
     mlp_dims: List[int] = field(default_factory=lambda: [512, 512])
     """Learning rate for actor/critic"""
@@ -109,8 +109,6 @@ class iQRLConfig:
     use_tar_enc: bool = True
     """Predict change in latent or next latent? i.e. next_z = z + f(z, a) else next_z = f(z, a)"""
     use_delta: bool = True
-    """Use LayerNorm or BatchNorm for encoder?"""
-    enc_norm_type: str = "ln"
     """(Optionally) use dropout for critic"""
     q_dropout: float = 0.0
     """(Optionally) use dropout for MLP encoder"""
