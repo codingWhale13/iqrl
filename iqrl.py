@@ -31,8 +31,6 @@ class iQRLConfig:
 
     """Map environment states to latent states before using them in other components"""
     use_obs_encoder: bool = True  # Used in original iQRL, thus defaults to True
-    """Map policy actions to latent actions before using them in dynamics and critic"""
-    use_action_encoder: bool = False  # Not in original iQRL, thus defaults to False
     """Condition {encoders, transition dynamics, actor, critic} on body & task IDs"""
     condition_encoders: bool = True
     condition_dynamics: bool = True
@@ -325,16 +323,6 @@ class Encoder(nn.Module):
                 norm_mode=cfg.norm_mode,
                 dropout=cfg.enc_dropout,
             )
-        if cfg.use_action_encoder:
-            self._encoder["action"] = h.mlp(
-                in_dim=act_dim,
-                mlp_dims=cfg.enc_mlp_dims,
-                out_dim=latent_act_dim,
-                ctx_dim=ctx_dim,
-                condition_layer=cfg.condition_layer if cfg.condition_encoders else None,
-                norm_mode=cfg.norm_mode,
-                dropout=cfg.enc_dropout,
-            )
         if cfg.use_tar_enc:
             self._encoder_tar = copy.deepcopy(self._encoder).requires_grad_(False)
 
@@ -420,20 +408,6 @@ class Encoder(nn.Module):
             td.update({"codes": z})
 
         return td
-
-    def encode_action(
-        self, action: torch.Tensor, ctx: list[torch.Tensor], tar: bool = False
-    ) -> torch.Tensor:
-        if not self.cfg.use_action_encoder:
-            return action  # Identity mapping
-
-        # NOTE: No padding required because action comes from padded replay buffer
-        if tar:
-            za = self._encoder_tar["action"](action, ctx)
-        else:
-            za = self._encoder["action"](action, ctx)
-
-        return za  # NOTE: actions are not being quantized currently
 
     def trans(
         self,
@@ -562,7 +536,7 @@ class Encoder(nn.Module):
             # Prepare context of correct dimensionality and encode all actions
             ctx = self.get_context(batch.observations)
             ctx_t = self.get_context(batch.observations[0])
-            actions = self.encode_action(batch.actions, ctx=ctx, tar=False)
+            actions = batch.actions
 
             # Rollout next H latent states
             z = self.encode_obs(batch.observations[0])["codes"]
@@ -684,8 +658,6 @@ class iQRL(nn.Module):
         ##### Calculate dimensions of (optional) latent spaces #####
         latent_obs_dim = cfg.latent_dim if cfg.use_obs_encoder else self.obs_dim
         latent_act_dim = self.act_dim
-        if cfg.use_action_encoder:
-            latent_act_dim *= cfg.latent_action_dim_factor
 
         ##### Init encoders, dynamics, and optionally reward model #####
         if cfg.use_representation_learning:
@@ -778,14 +750,6 @@ class iQRL(nn.Module):
         else:
             return self.encoder.encode_obs(obs=obs, tar=tar)
 
-    def encode_action(
-        self, action: torch.Tensor, ctx: list[torch.Tensor], tar: bool = False
-    ) -> torch.Tensor:
-        if not self.cfg.use_action_encoder or not self.cfg.use_representation_learning:
-            return action  # Identity mapping
-        else:
-            return self.encoder.encode_action(action, ctx, tar)
-
     def update(
         self,
         replay_buffer: ReplayBuffer,
@@ -831,9 +795,8 @@ class iQRL(nn.Module):
 
                     # Reward prediction
                     ctx = self.encoder.get_context(batch.observations)
-                    actions = self.encode_action(batch.actions, ctx=ctx, tar=False)
                     r_pred = self.encoder.reward(
-                        z=zs["codes"][:-1], a=actions, ctx=ctx
+                        z=zs["codes"][:-1], a=batch.actions, ctx=ctx
                     ).squeeze(-1)
 
                     if self.cfg.Q_and_rew_loss == "mse":
@@ -937,7 +900,7 @@ class iQRL(nn.Module):
             # Extract current (z, a) from full batch to make Q-prediction
             z = batch.z["state"][0]
             ctx = self.get_context(batch.observations[0])
-            a = self.encode_action(batch.actions[0], ctx=ctx)
+            a = batch.actions[0]
             q_values = self.Q(z=z, a=a, ctx=ctx, return_type="all")
 
             # Make Q-target
@@ -1059,7 +1022,7 @@ class iQRL(nn.Module):
             next_z = nstep_batch.next_z["state"]
             # Calculate next_a, i.e. the action that agent takes in next_z
             ctx = self.get_context(nstep_batch.observations)
-            next_a_raw, next_z_log_pi, _ = self.pi(
+            next_a, next_z_log_pi, _ = self.pi(
                 next_z,
                 ctx=ctx,
                 act_mask=nstep_batch.observations["act_mask"],
@@ -1067,7 +1030,6 @@ class iQRL(nn.Module):
                 eval_mode=True,
                 smooth=True,
             )
-            next_a = self.encode_action(next_a_raw, ctx=ctx)
 
             # Calculate Q target, using next_s and next_a to "peek into the future"
             min_q_next_tar = self.Q_tar(z=next_z, a=next_a, ctx=ctx, return_type="min")
@@ -1122,7 +1084,6 @@ class iQRL(nn.Module):
         pi_actions, log_pi, _ = self.pi(
             z=z, ctx=ctx, act_mask=batch.observations["act_mask"], eval_mode=True
         )
-        pi_actions = self.encode_action(pi_actions, ctx=ctx)
 
         Q_values = self.Q(z=z, a=pi_actions, ctx=ctx, return_type="avg")
         if self.cfg.rl_algo == "TD3":
