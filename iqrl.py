@@ -132,6 +132,8 @@ class iQRLConfig:
     vmin: float = -10.0
     vmax: float = 10.0
     bin_size: float = -1  # Depends on num_bins, vmin, vmax; determined later
+    """If set to False, only representation learning components are used (no actor or critic)"""
+    use_rl: bool = True
     """If set to False, only actor and critic are used (no encoder, dynamics, ...), i.e. TD3 with one-hot encodings"""
     use_representation_learning: bool = True
 
@@ -423,7 +425,7 @@ class Encoder(nn.Module):
         else:
             z = self._encoder["state"](obs_padded, ctx)
         td = TensorDict({"state": z}, batch_size=obs.batch_size)
-        
+
         if not self.cfg.use_obs_encoder:
             return td  # "Identity mapping"
 
@@ -700,8 +702,8 @@ class iQRL(nn.Module):
         if cfg.use_action_encoder:
             latent_act_dim *= cfg.latent_action_dim_factor
 
-        ##### Init encoders, dynamics, and optionally reward model #####
         if cfg.use_representation_learning:
+            ##### Init encoders, dynamics, and optionally reward model #####
             self.encoder = Encoder(
                 cfg,
                 obs_dim=self.obs_dim,
@@ -716,30 +718,35 @@ class iQRL(nn.Module):
             if cfg.compile:
                 self.encoder = torch.compile(self.encoder, mode="default")
 
-        ##### Init actor network and its target network #####
-        self._pi = Actor(
-            cfg,
-            obs_dim=latent_obs_dim,
-            ctx_dim=ctx_dim,
-            act_dim=self.act_dim,
-            action_scale=(act_spec_hi - act_spec_lo).to(cfg.device) / 2.0,
-            action_bias=(act_spec_hi + act_spec_lo).to(cfg.device) / 2.0,
-        ).to(cfg.device)
-        self._pi = torch.compile(self._pi, mode="default") if cfg.compile else self._pi
-        pi_tar = copy.deepcopy(self._pi).requires_grad_(False)
-        self._pi_tar = torch.compile(pi_tar, mode="default") if cfg.compile else pi_tar
+        if cfg.use_rl:
+            ##### Init actor network and its target network #####
+            self._pi = Actor(
+                cfg,
+                obs_dim=latent_obs_dim,
+                ctx_dim=ctx_dim,
+                act_dim=self.act_dim,
+                action_scale=(act_spec_hi - act_spec_lo).to(cfg.device) / 2.0,
+                action_bias=(act_spec_hi + act_spec_lo).to(cfg.device) / 2.0,
+            ).to(cfg.device)
+            self._pi = (
+                torch.compile(self._pi, mode="default") if cfg.compile else self._pi
+            )
+            pi_tar = copy.deepcopy(self._pi).requires_grad_(False)
+            self._pi_tar = (
+                torch.compile(pi_tar, mode="default") if cfg.compile else pi_tar
+            )
 
-        ##### Init critics and their target networks #####
-        Q = Critic(cfg, in_dim=latent_obs_dim + latent_act_dim, ctx_dim=ctx_dim).to(
-            cfg.device
-        )
-        self.Q = torch.compile(Q, mode="default") if cfg.compile else Q
-        Q_tar = copy.deepcopy(self.Q).requires_grad_(False)
-        self.Q_tar = torch.compile(Q_tar, mode="default") if cfg.compile else Q_tar
+            ##### Init critics and their target networks #####
+            Q = Critic(cfg, in_dim=latent_obs_dim + latent_act_dim, ctx_dim=ctx_dim).to(
+                cfg.device
+            )
+            self.Q = torch.compile(Q, mode="default") if cfg.compile else Q
+            Q_tar = copy.deepcopy(self.Q).requires_grad_(False)
+            self.Q_tar = torch.compile(Q_tar, mode="default") if cfg.compile else Q_tar
 
         ##### Optimizers #####
-        self.pi_opt = torch.optim.Adam(self._pi.parameters(), lr=cfg.lr)
-        if cfg.use_representation_learning:
+        if cfg.use_representation_learning and cfg.use_rl:
+            self.pi_opt = torch.optim.Adam(self._pi.parameters(), lr=cfg.lr)
             if self.cfg.update_Q_with_rep:
                 enc_opt_params = list(self.encoder.parameters()) + list(
                     self.Q.parameters()
@@ -748,8 +755,13 @@ class iQRL(nn.Module):
                 enc_opt_params = self.encoder.parameters()
                 self.q_opt = torch.optim.Adam(self.Q.parameters(), lr=cfg.lr)
             self.enc_opt = torch.optim.AdamW(enc_opt_params, lr=cfg.enc_lr)
-        else:
+        elif cfg.use_rl:  # RL only
+            self.pi_opt = torch.optim.Adam(self._pi.parameters(), lr=cfg.lr)
             self.q_opt = torch.optim.Adam(self.Q.parameters(), lr=cfg.lr)
+        elif cfg.use_representation_learning:  # Representation learning only
+            self.enc_opt = torch.optim.AdamW(self.encoder.parameters(), lr=cfg.enc_lr)
+        else:
+            raise ValueError("Need to learn either RL or representation learning")
 
         ##### Exploration noise schedule #####
         self._exploration_noise_schedule = h.LinearSchedule(
@@ -816,9 +828,9 @@ class iQRL(nn.Module):
             logger.info(f"Performing {num_updates} iQRL updates...")
         for i in range(num_updates):
             batch = replay_buffer.sample(rb_idx=rb_idx)
-
-            self.Q.train()
-            self.Q_tar.train()
+            if self.cfg.use_rl:
+                self.Q.train()
+                self.Q_tar.train()
 
             ##### Calculate representation losses #####
             tc_loss = torch.zeros(1).to(self.cfg.device)
@@ -949,55 +961,56 @@ class iQRL(nn.Module):
             assert batch.rewards.shape == (self.cfg.horizon, self.cfg.batch_size)
             assert batch.z is not None
 
-            # Extract current (z, a) from full batch to make Q-prediction
-            z = batch.z["state"][0]
-            ctx = self.get_context(batch.observations[0])
-            a = self.encode_action(batch.actions[0], ctx=ctx)
-            q_values = self.Q(z=z, a=a, ctx=ctx, return_type="all")
+            if self.cfg.use_rl:
+                # Extract current (z, a) from full batch to make Q-prediction
+                z = batch.z["state"][0]
+                ctx = self.get_context(batch.observations[0])
+                a = self.encode_action(batch.actions[0], ctx=ctx)
+                q_values = self.Q(z=z, a=a, ctx=ctx, return_type="all")
 
-            # Make Q-target
-            with torch.no_grad():
-                if self.use_td_lambda:
-                    all_nstep_batch = utils.to_all_nstep(
-                        batch, self.cfg.horizon, self.cfg.gamma
-                    )
-                    next_q_value = self.get_lambda_return(all_nstep_batch)
-                else:
-                    nstep_batch = utils.to_nstep(
-                        batch, nstep=self.cfg.nstep, gamma=self.cfg.gamma
-                    )
-                    next_q_value = self.get_nstep_return(nstep_batch)
+                # Make Q-target
+                with torch.no_grad():
+                    if self.use_td_lambda:
+                        all_nstep_batch = utils.to_all_nstep(
+                            batch, self.cfg.horizon, self.cfg.gamma
+                        )
+                        next_q_value = self.get_lambda_return(all_nstep_batch)
+                    else:
+                        nstep_batch = utils.to_nstep(
+                            batch, nstep=self.cfg.nstep, gamma=self.cfg.gamma
+                        )
+                        next_q_value = self.get_nstep_return(nstep_batch)
 
-            # Calculate Q-loss
-            if self.cfg.Q_and_rew_loss == "mse":
-                q_values = q_values.squeeze(-1)
-                next_q_value = next_q_value.broadcast_to(
-                    q_values.shape
-                )  # For num_critics
-                q_loss = F.mse_loss(q_values, next_q_value)
-            elif self.cfg.Q_and_rew_loss == "soft-ce":
-                q_loss = 0
+                # Calculate Q-loss
+                if self.cfg.Q_and_rew_loss == "mse":
+                    q_values = q_values.squeeze(-1)
+                    next_q_value = next_q_value.broadcast_to(
+                        q_values.shape
+                    )  # For num_critics
+                    q_loss = F.mse_loss(q_values, next_q_value)
+                elif self.cfg.Q_and_rew_loss == "soft-ce":
+                    q_loss = 0
+                    for i in range(self.cfg.num_critics):
+                        q_loss += h.soft_ce(q_values[i], next_q_value, self.cfg).mean()
+                    q_loss /= self.cfg.num_critics
+
+                    # For logging, change two-hot encoded vectors back to scalars
+                    q_values = h.two_hot_inv(q_values, self.cfg)
+
+                critic_info = {
+                    "q_loss": q_loss.item(),
+                    "q_mean": q_values.mean().item(),
+                    "q_min": q_values.min().item(),
+                    "q_max": q_values.max().item(),
+                    "q_std": q_values.std().item(),
+                    "q_targ_mean": next_q_value.mean().item(),
+                    "q_targ_min": next_q_value.min().item(),
+                    "q_targ_max": next_q_value.max().item(),
+                    "q_targ_std": next_q_value.std().item(),
+                }
                 for i in range(self.cfg.num_critics):
-                    q_loss += h.soft_ce(q_values[i], next_q_value, self.cfg).mean()
-                q_loss /= self.cfg.num_critics
-
-                # For logging, change two-hot encoded vectors back to scalars
-                q_values = h.two_hot_inv(q_values, self.cfg)
-
-            critic_info = {
-                "q_loss": q_loss.item(),
-                "q_mean": q_values.mean().item(),
-                "q_min": q_values.min().item(),
-                "q_max": q_values.max().item(),
-                "q_std": q_values.std().item(),
-                "q_targ_mean": next_q_value.mean().item(),
-                "q_targ_min": next_q_value.min().item(),
-                "q_targ_max": next_q_value.max().item(),
-                "q_targ_std": next_q_value.std().item(),
-            }
-            for i in range(self.cfg.num_critics):
-                critic_info.update({f"q{i+1}_values": q_values[i].mean().item()})
-            info.update(critic_info)
+                    critic_info.update({f"q{i+1}_values": q_values[i].mean().item()})
+                info.update(critic_info)
 
             if self.cfg.use_representation_learning:
                 rep_loss = (
@@ -1023,7 +1036,7 @@ class iQRL(nn.Module):
                     # Update representation components
                     self.enc_opt.step()
 
-                if not self.cfg.update_Q_with_rep:
+                if self.cfg.use_rl and not self.cfg.update_Q_with_rep:
                     # Optimize critic, separately from representation update
                     self.critic_update_counter += 1
                     info["critic_update_counter"] = self.critic_update_counter
@@ -1032,7 +1045,8 @@ class iQRL(nn.Module):
                     self.q_opt.step()
 
                 # Update the target networks
-                h.soft_update_params(self.Q, self.Q_tar, tau=self.cfg.tau)
+                if self.cfg.use_rl:
+                    h.soft_update_params(self.Q, self.Q_tar, tau=self.cfg.tau)
                 if self.cfg.use_representation_learning:
                     h.soft_update_params(
                         self.encoder._encoder,
@@ -1041,13 +1055,14 @@ class iQRL(nn.Module):
                     )
                     self.encoder.eval()
 
-            self.Q.eval()
-            self.Q_tar.eval()
+            if self.cfg.use_rl:
+                self.Q.eval()
+                self.Q_tar.eval()
 
-            ##### Update actor less frequently than critic #####
-            if self.critic_update_counter % self.cfg.actor_update_freq == 0:
-                actor_batch = utils.to_nstep(batch, nstep=1, gamma=self.cfg.gamma)
-                info.update(self.pi_update_step(batch=actor_batch, fake=fake))
+                ##### Update actor less frequently than critic #####
+                if self.critic_update_counter % self.cfg.actor_update_freq == 0:
+                    actor_batch = utils.to_nstep(batch, nstep=1, gamma=self.cfg.gamma)
+                    info.update(self.pi_update_step(batch=actor_batch, fake=fake))
 
             if i % self.cfg.logging_freq == 0 and not fake:
                 if self.cfg.verbose:

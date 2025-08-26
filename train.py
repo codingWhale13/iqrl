@@ -47,7 +47,7 @@ class TrainConfig:
 
     # Experiment: General parameters
     max_episode_steps: int = 1000  # Max episode length
-    num_episodes: int = 3000  # Number of training episodes per environment
+    num_episodes: int = 1000  # Number of training episodes per environment
     random_episodes: int = 10  # Number of random episodes at start
     action_repeat: int = 2
     use_naive_keys: bool = False  # Set to True to verify that embeddings are learned
@@ -61,7 +61,6 @@ class TrainConfig:
     # Experiment: Offline data
     use_offline_data: bool = False  # Train fully offline (but evaluate still online)
     normalize_states: bool = False  # Only takes effect if use_offline_data==True
-    max_offline_episodes_per_task: int = 1000  # Limit offline episodes to reduce memory
 
     # Evaluation
     eval_only: bool = False  # Skip training (useful when loading checkpoint)
@@ -159,6 +158,7 @@ def train(cfg: TrainConfig):
     logging.basicConfig(level=logging.DEBUG)
     logger = logging.getLogger(__name__)
 
+    assert cfg.agent.use_rl or cfg.agent.use_representation_learning, "Nothing to learn"
     assert cfg.agent.condition_layer in ["first", "all"], "Unknown condition_layer"
     assert not (cfg.agent.use_fsq and cfg.agent.use_simnorm), "Conflict: FSQ, SimNorm"
     assert cfg.agent.Q_and_rew_loss in ["mse", "soft-ce"], "Unsupported Q_and_rew_loss"
@@ -373,6 +373,108 @@ def train(cfg: TrainConfig):
     def evaluate(
         cfg: TrainConfig, steps: list[int], episode_idx: int, start_time: float
     ) -> dict:
+        if cfg.agent.use_rl:
+            return _evaluate_rl(cfg, steps, episode_idx, start_time)
+        else:
+            return _evaluate_non_rl(cfg, steps, episode_idx, start_time)
+
+    def _evaluate_non_rl(
+        cfg: TrainConfig, steps: list[int], episode_idx: int, start_time: float
+    ) -> dict:
+        batch = rb.sample()
+        zs = agent.encoder.latent_rollout(batch, grad=False)
+
+        breakpoint()  # inspect batch
+        # inspect batch
+        rew_true = batch.rewards
+        rew_pred = 0
+
+        # ===
+
+        ##### Log how well the dynamics and reward model are working #####
+        max_t = cfg.max_episode_steps // cfg.action_repeat
+        rew_mses = np.empty((env_count, max_t, cfg.num_eval_episodes))
+        true_rews = np.empty((env_count, max_t, cfg.num_eval_episodes))
+
+        for i, data in enumerate(batch):
+            rew_target = data["next"]["reward"]  # Shape: (env count, max_t, 1)
+            true_rews[:, :, i] = rew_target.view((env_count, max_t))
+
+            # Extract actions with shape (env count, max_t, max_act_dim)
+            if isinstance(data, TensorDict):
+                actions = data["action"]
+            else:
+                actions = data.get_nestedtensor("action")
+                actions = torch.nested.to_padded_tensor(actions, padding=0.0)
+
+            # Encode initial env observation; z.shape is (env_count, L)
+            z = agent.encode_obs(data["observation"][:, 0])["codes"]
+
+            # Predict next max_t latent states and calculate reward diff on the way
+            ctx_t = agent.get_context(data["observation"][..., 0])
+            for t in range(max_t):
+                rew_pred_t = agent.encoder.reward(z, actions[:, t], ctx_t).detach()
+                if cfg.agent.Q_and_rew_loss == "soft-ce":
+                    rew_pred_t = h.two_hot_inv(rew_pred_t, cfg.agent)
+                rew_mses[:, t, i] = ((rew_pred_t - rew_target[:, t]) ** 2).squeeze()
+
+                # Use dynamics model to move on to next latent observation
+                z = agent.encoder.trans(z, actions[:, t], ctx_t)["codes"]
+
+        true_rews = true_rews.mean(axis=-1)
+        rew_mses = rew_mses.mean(axis=-1)  # New shape: (env_count, max_t)
+
+        # Can we make it here?
+
+        # Plot result (1 line per env)
+        df = pd.DataFrame(rew_mses)
+        df["env"] = df.index  # add an environment label
+        df_long = df.melt(id_vars="env", var_name="time", value_name="value")
+        df_long["time"] = df_long["time"].astype(int)
+        df_long["env_name"] = df_long["env"].map(lambda i: env_names[i])
+
+        if cfg.checkpoint is None:
+            run_id = "No checkpoint"
+        else:
+            run_id = cfg.checkpoint.split("/")[-3]  # YYYY-MM-DD
+
+        plt.figure(figsize=(10, 6))
+        sns.lineplot(data=df_long, x="time", y="value", hue="env_name", palette="tab10")
+        plt.xlabel("Env step")
+        plt.ylabel("(rew_true - rew_pred)**2")
+        plt.title(
+            f"{run_id}: Reward discrepancy (avg. over {cfg.num_eval_episodes} eps.)"
+        )
+        plt.legend(title="Env")
+        plt.tight_layout()
+
+        plt.savefig("dyn_and_rew_check.pdf", format="pdf")
+        plt.close()
+
+        # Also plot true rewards
+        df = pd.DataFrame(true_rews)
+        df["env"] = df.index  # add an environment label
+        df_long = df.melt(id_vars="env", var_name="time", value_name="value")
+        df_long["time"] = df_long["time"].astype(int)
+        df_long["env_name"] = df_long["env"].map(lambda i: env_names[i])
+        plt.figure(figsize=(10, 6))
+        sns.lineplot(data=df_long, x="time", y="value", hue="env_name", palette="tab10")
+        plt.xlabel("Env step")
+        plt.ylabel("rew_true")
+        plt.title(f"{run_id}: true rewards (avg. over {cfg.num_eval_episodes} eps.)")
+        plt.legend(title="Env")
+        plt.tight_layout()
+
+        plt.savefig("true_rews.pdf", format="pdf")
+        plt.close()
+
+        # ===
+
+        return {}
+
+    def _evaluate_rl(
+        cfg: TrainConfig, steps: list[int], episode_idx: int, start_time: float
+    ) -> dict:
         """Evaluate agent in eval_env and log metrics"""
         eval_metrics = {env_name: {} for env_name in env_names}
         eval_start_time = time.time()
@@ -420,8 +522,12 @@ def train(cfg: TrainConfig):
         ##### Task-specific training metrics #####
         if cfg.log_per_task_sa or cfg.log_per_task_q:
             for task_i in range(env_count):
+                # NOTE: This is per-task, so num_new_transitions = true env steps
                 task_metrics = agent.update(
-                    replay_buffer=rb, num_new_transitions=500, fake=True, rb_idx=task_i
+                    replay_buffer=rb,
+                    num_new_transitions=cfg.max_episode_steps // cfg.action_repeat,
+                    fake=True,
+                    rb_idx=task_i,  #  Per-task!
                 )
                 task_metrics["env_step"] = steps[task_i] * cfg.action_repeat
 
@@ -658,9 +764,12 @@ def train(cfg: TrainConfig):
     if cfg.use_offline_data:
         print("Loading offline data into replay buffer...")
 
+        random_policy_module = TensorDictModule(
+            env.action_spec.rand, in_keys=[], out_keys=["action"]
+        )
         rollout_blueprint = env.rollout(
             max_steps=cfg.max_episode_steps // cfg.action_repeat,
-            policy=policy_module,
+            policy=random_policy_module,
             break_when_any_done=True,  # Same-length episodes -> break when done
         )
 
@@ -668,13 +777,16 @@ def train(cfg: TrainConfig):
         state_normalization = {}  # Needed during eval if cfg.normalize_states==True
         for i in range(env_count):
             MT30_DATA_DIR = os.path.join(
-                os.environ.get("WRKDIR"), "data", "mt30", "per-task"
+                os.environ.get("WRKDIR"), "data", "per-task", "mt30"
             )
             file_path = os.path.join(os.path.join(MT30_DATA_DIR, f"{env_names[i]}.pt"))
             task_data_raw = torch.load(file_path, weights_only=False).to(cfg.device)
             assert sorted(task_data_raw.keys()) == ["action", "obs", "reward"]
 
-            task_data_raw = task_data_raw[: cfg.max_offline_episodes_per_task]
+            # Cut out the right shape -> one extra env step for obs and next_obs
+            task_data_raw = task_data_raw[
+                : cfg.num_episodes, : cfg.max_episode_steps // cfg.action_repeat + 1
+            ]
 
             task_blueprint = rollout_blueprint[i]
             new_shape = [task_data_raw.shape[0]] + list(task_blueprint.shape)
@@ -684,6 +796,7 @@ def train(cfg: TrainConfig):
             task_data["next"]["observation"]["state"] = task_data_raw["obs"][:, 1:]
             task_data["action"] = task_data_raw["action"][:, 1:]
             task_data["reward"] = task_data_raw["reward"][:, 1:]
+            breakpoint()  # TODO: figure out why rewards are all zero
             # "done" and ("next", "terminated") remain False all the way, it's fine
 
             if cfg.normalize_states:
@@ -712,10 +825,16 @@ def train(cfg: TrainConfig):
         data = data.flatten(0, 1)  # Merge first 2 dims: env_count and episode_count
 
         rb.extend(data)
+        breakpoint()  # TODO: Why are rewards all zero?!
+
+    # Set a default to be used for offline data (where no actual new transitions happen)
+    num_new_transitions = (cfg.max_episode_steps // cfg.action_repeat) * env_count
 
     steps = [0 for _ in range(env_count)]  # Some envs might step more than others
     start_time = time.time()
+    print("total_params", agent.total_params)
     for episode_idx in range(cfg.num_episodes):
+        print("start epsiode", episode_idx)
         if not cfg.use_offline_data:
             ##### Rollout the policy in the environment #####
             with torch.no_grad():
@@ -742,6 +861,7 @@ def train(cfg: TrainConfig):
 
         if not cfg.use_offline_data:
             ##### Log episode metrics #####
+            # Update num_new_transitions in case some episodes ended early
             num_new_transitions = 0
             for i in range(env_count):
                 step_count_i = data["next"]["step_count"][i][-1].cpu().sum().item()
