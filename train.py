@@ -50,7 +50,6 @@ class TrainConfig:
     num_episodes: int = 3000  # Number of training episodes per environment
     random_episodes: int = 10  # Number of random episodes at start
     action_repeat: int = 2
-    use_naive_keys: bool = False  # Set to True to verify that embeddings are learned
     buffer_size: int = 2_000_000  # Replay buffer size, per task
     prefetch: int = 5
     seed: int = 42
@@ -191,12 +190,8 @@ def train(cfg: TrainConfig):
     task_names_org = [task_name for _, task_name in cfg.envs]  # Keep these for make_env
     body_names = [body_name for body_name, _ in cfg.envs]
     task_names = [task_name for _, task_name in cfg.envs]
-    if cfg.use_naive_keys:
-        body_names, body_str_to_id = h.seq_to_id_naive(body_names)
-        task_names, task_str_to_id = h.seq_to_id_naive(task_names)
-    else:
-        body_str_to_id = h.seq_to_id(body_names)
-        task_str_to_id = h.seq_to_id(task_names)
+    body_str_to_id = h.seq_to_id(body_names)
+    task_str_to_id = h.seq_to_id(task_names)
     n_body = len(set(body_names))
     n_task = len(set(task_names))
     print(f"{n_body=}", f"{n_task=}")
