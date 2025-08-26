@@ -64,10 +64,6 @@ class TrainConfig:
     capture_eval_video: bool = False  # Fails on AMD GPU so set to False
     log_per_task_sa: bool = False  # Log task-specific state & act ranges
     log_per_task_q: bool = False  # Log task-specific Q-values
-    visualize_latent_states: bool = False  # Visualize latent state space using t-SNE
-    visualize_latent_actions: bool = False  # Visualize latent action space using t-SNE
-    visualize_body_embeddings: bool = False  # Visualize body embeddings using t-SNE
-    visualize_task_embeddings: bool = False  # Visualize task embeddings using t-SNE
     get_embedding_cosine: bool = False
 
     # W&B config
@@ -158,8 +154,6 @@ def train(cfg: TrainConfig):
     assert cfg.agent.rl_algo in ["TD3", "SAC"], "Only TD3 and SAC are supported"
     assert cfg.agent.obs_types == ["state"], "Only obs_types=['state'] is supported"
     assert cfg.agent.enc_update_freq == 1, "enc_update_freq!=1 currently not supported"
-    if cfg.visualize_body_embeddings or cfg.visualize_task_embeddings:
-        assert cfg.agent.context_dim is not None, "No embeddings found to visualize"
     if not cfg.agent.use_representation_learning:
         logger.info("No representation learning => encoders and FSQ will not be used")
         cfg.agent.use_obs_encoder = False
@@ -466,84 +460,6 @@ def train(cfg: TrainConfig):
                             break_when_any_done=False,
                         )
                         video_env.transform.dump()
-
-            if (
-                cfg.visualize_latent_states
-                or cfg.visualize_latent_actions
-                or cfg.visualize_body_embeddings
-                or cfg.visualize_task_embeddings
-            ):
-
-                def log_tsne(latent_data: np.ndarray, idx_name: str, val_name: str):
-                    if latent_data.shape[0] == 1:
-                        print("Can't run t-SNE with a single sample")
-                        return
-                    perp = min(30.0, latent_data.shape[0] - 1)
-                    tsne = TSNE(verbose=1, max_iter=5000, perplexity=perp)
-                    tsne_results = tsne.fit_transform(latent_data)
-                    if idx_name == "Env":
-                        idx = [env_names[i] for i in range(env_count) for _ in range(n)]
-                    elif idx_name == "Embodiment":
-                        idx = []
-                        for b in body_names:
-                            if b not in idx:
-                                idx.append(b)
-                    elif idx_name == "Task":
-                        idx = []
-                        for t in task_names:
-                            if t not in idx:
-                                idx.append(t)
-                    tsne_data = pd.DataFrame(
-                        {
-                            idx_name: idx,
-                            "t-SNE dim 1": tsne_results[:, 0],
-                            "t-SNE dim 2": tsne_results[:, 1],
-                        }
-                    )
-
-                    plt.figure(figsize=(16, 10))
-                    plt.title(f"{val_name} ({episode_idx} episodes)")
-                    tsne_plot = sns.scatterplot(
-                        x="t-SNE dim 1",
-                        y="t-SNE dim 2",
-                        hue=idx_name,
-                        palette=sns.color_palette("husl", len(set(idx))),
-                        data=tsne_data,
-                        legend="full",
-                        alpha=0.7 if idx_name == "Env" else 1,
-                    )
-                    wandb.log(
-                        {
-                            f"tsne_latent_{val_name.replace(' ','_').lower()}": wandb.Image(
-                                tsne_plot.get_figure()
-                            )
-                        }
-                    )
-
-                data = pad_sequence(eval_data, pad_dim=-1)  # Pad latest eval iter
-                n = data.shape[1]  # Samples per env
-
-                # t-SNE expects (n_samples, n_features) -> (env_count*n, latent_dim)
-                with torch.no_grad():
-                    if cfg.visualize_latent_states:
-                        latent_states = agent.encode_obs(data["observation"])["state"]
-                        latent_states = latent_states.flatten(0, 1).cpu().numpy()
-                        log_tsne(latent_states, "Env", "Latent states")
-                    if cfg.visualize_latent_actions:
-                        latent_actions = agent.encode_action(
-                            action=data["action"].to(cfg.device),
-                            ctx=agent.get_context(data["observation"]),
-                        )
-                        latent_actions = latent_actions.flatten(0, 1).cpu().numpy()
-                        log_tsne(latent_actions, "Env", "Latent actions")
-                    if cfg.visualize_task_embeddings:
-                        task_ids = torch.arange(n_task).long().to(cfg.device)
-                        task_emb = agent.encoder._task_emb(task_ids).cpu().numpy()
-                        log_tsne(task_emb, "Task", "Task embeddings")
-                    if cfg.visualize_body_embeddings:
-                        body_ids = torch.arange(n_body).long().to(cfg.device)
-                        body_emb = agent.encoder._body_emb(body_ids).cpu().numpy()
-                        log_tsne(body_emb, "Embodiment", "Body embeddings")
 
         ##### Log rank of latent and active codebook percent #####
         if cfg.agent.use_representation_learning:
