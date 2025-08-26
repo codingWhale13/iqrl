@@ -59,7 +59,6 @@ class TrainConfig:
     verbose: bool = False  # if true print training progress
 
     # Evaluation
-    eval_only: bool = False  # Skip training (useful when loading checkpoint)
     eval_every_episodes: int = 20
     num_eval_episodes: int = 10
     capture_eval_video: bool = False  # Fails on AMD GPU so set to False
@@ -658,9 +657,6 @@ def train(cfg: TrainConfig):
         data = pad_sequence(data, pad_dim=-1)  # LazyStackedTensorDict -> TensorDict
         rb.extend(data)
 
-        if cfg.eval_only:
-            break  # Only use final eval at the very end of this function
-
         if episode_idx == 0:
             print(colored("First episodes data:", "green", attrs=["bold"]), data)
 
@@ -724,10 +720,9 @@ def train(cfg: TrainConfig):
         torch.cuda.empty_cache()
 
     # Save final checkpoint and evaluate the final agent
-    if not cfg.eval_only:
-        if cfg.verbose:
-            logger.info("Saving final model checkpoint")
-        torch.save({"model": agent.state_dict()}, "./checkpoint")
+    if cfg.verbose:
+        logger.info("Saving final model checkpoint")
+    torch.save({"model": agent.state_dict()}, "./checkpoint")
     _ = evaluate(cfg, steps=steps, episode_idx=cfg.num_episodes, start_time=start_time)
 
     env.close()
