@@ -22,7 +22,6 @@ from torchrl.record import VideoRecorder
 from torchrl.record.loggers import WandbLogger
 
 from .dmcontrol import make_env as dmcontrol_make_env
-from .offline_dummy import OfflineDummyEnv
 
 # NOTE: Transform._call says it's called by step() and reset() but only step() is true
 # That's why _reset is needed below. See also: https://github.com/pytorch/rl/issues/2595
@@ -136,8 +135,6 @@ def make_env(
     if not from_pixels:
         pixels_only = False
 
-    if use_offline_data:
-        env = OfflineDummyEnv(obs_dim=obs_dim, act_dim=act_dim, device=device)
     elif env_name in gym.envs.registry.keys():
         env = GymEnv(
             env_name=env_name,

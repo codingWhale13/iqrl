@@ -58,11 +58,6 @@ class TrainConfig:
     device: str = "cuda"  # "cpu" or "cuda" etc
     verbose: bool = False  # if true print training progress
 
-    # Experiment: Offline data
-    use_offline_data: bool = False  # Train fully offline (but evaluate still online)
-    normalize_states: bool = False  # Only takes effect if use_offline_data==True
-    max_offline_episodes_per_task: int = 1000  # Limit offline episodes to reduce memory
-
     # Evaluation
     eval_only: bool = False  # Skip training (useful when loading checkpoint)
     eval_every_episodes: int = 20
@@ -260,14 +255,8 @@ def train(cfg: TrainConfig):
         for i, fn in enumerate(create_fn)
     ]
 
-    env = ParallelEnv(
-        env_count,
-        [partial(fn, use_offline_data=cfg.agent.use_offline_data) for fn in create_fn],
-    )
-    eval_env = ParallelEnv(
-        env_count,
-        [partial(fn, use_offline_data=False) for fn in create_fn],
-    )
+    env = ParallelEnv(env_count, create_fn)
+    eval_env = ParallelEnv(env_count, create_fn)
     if cfg.capture_eval_video:
         video_envs = [
             make_env(
@@ -280,7 +269,6 @@ def train(cfg: TrainConfig):
                     [task_str_to_id[task_names[i]]], device=cfg.device
                 ),
                 record_video=cfg.capture_eval_video,
-                use_offline_data=False,
                 obs_dim=od[i],
                 act_dim=ad[i],
                 max_act_dim=max(ad),
@@ -655,128 +643,65 @@ def train(cfg: TrainConfig):
         writer.log_scalar(name="eval/", value=eval_metrics)
         return eval_metrics
 
-    if cfg.use_offline_data:
-        print("Loading offline data into replay buffer...")
-
-        rollout_blueprint = env.rollout(
-            max_steps=cfg.max_episode_steps // cfg.action_repeat,
-            policy=policy_module,
-            break_when_any_done=True,  # Same-length episodes -> break when done
-        )
-
-        offline_data = []
-        state_normalization = {}  # Needed during eval if cfg.normalize_states==True
-        for i in range(env_count):
-            MT30_DATA_DIR = os.path.join(
-                os.environ.get("WRKDIR"), "data", "mt30", "per-task"
-            )
-            file_path = os.path.join(os.path.join(MT30_DATA_DIR, f"{env_names[i]}.pt"))
-            task_data_raw = torch.load(file_path, weights_only=False).to(cfg.device)
-            assert sorted(task_data_raw.keys()) == ["action", "obs", "reward"]
-
-            task_data_raw = task_data_raw[: cfg.max_offline_episodes_per_task]
-
-            task_blueprint = rollout_blueprint[i]
-            new_shape = [task_data_raw.shape[0]] + list(task_blueprint.shape)
-
-            task_data = task_blueprint.unsqueeze(0).expand(new_shape)
-            task_data["observation"]["state"] = task_data_raw["obs"][:, :-1]
-            task_data["next"]["observation"]["state"] = task_data_raw["obs"][:, 1:]
-            task_data["action"] = task_data_raw["action"][:, 1:]
-            task_data["reward"] = task_data_raw["reward"][:, 1:]
-            # "done" and ("next", "terminated") remain False all the way, it's fine
-
-            if cfg.normalize_states:
-                # Normalize over all states of this specific body&task combination
-                # States shape is (episode_count, ep_length, max_state_dim) -> dim=(0, 1)
-                mean = task_data["observation"]["state"].mean(dim=(0, 1))
-                std = task_data["observation"]["state"].std(dim=(0, 1)) + 1e-3
-                task_data["observation"]["state"] = (
-                    task_data["observation"]["state"] - mean
-                ) / std
-                task_data["next"]["observation"]["state"] = (
-                    task_data["next"]["observation"]["state"] - mean
-                ) / std
-
-                body_id = np.argmax(body_str_to_id[cfg.envs[i][0]]).item()
-                task_id = np.argmax(task_str_to_id[cfg.envs[i][1]]).item()
-                state_normalization[(body_id, task_id)] = (mean, std)
-
-            offline_data.append(task_data)
-
-        if cfg.normalize_states:
-            agent.set_state_norm(state_normalization)
-
-        data = LazyStackedTensorDict.lazy_stack(offline_data, dim=0)
-        data = pad_sequence(data, pad_dim=-1)  # LazyStackedTensorDict -> TensorDict
-        data = data.flatten(0, 1)  # Merge first 2 dims: env_count and episode_count
-
-        rb.extend(data)
-
+    
     steps = [0 for _ in range(env_count)]  # Some envs might step more than others
     start_time = time.time()
     for episode_idx in range(cfg.num_episodes):
-        if not cfg.use_offline_data:
-            ##### Rollout the policy in the environment #####
-            with torch.no_grad():
-                data = env.rollout(
-                    max_steps=cfg.max_episode_steps // cfg.action_repeat,
-                    policy=policy_module,
-                    break_when_any_done=False,
-                )
-            ##### Add data to the replay buffer #####
-            data = pad_sequence(data, pad_dim=-1)  # LazyStackedTensorDict -> TensorDict
-            rb.extend(data)
+        ##### Rollout the policy in the environment #####
+        with torch.no_grad():
+            data = env.rollout(
+                max_steps=cfg.max_episode_steps // cfg.action_repeat,
+                policy=policy_module,
+                break_when_any_done=False,
+            )
+        ##### Add data to the replay buffer #####
+        data = pad_sequence(data, pad_dim=-1)  # LazyStackedTensorDict -> TensorDict
+        rb.extend(data)
 
         if cfg.eval_only:
             break  # Only use final eval at the very end of this function
 
         if episode_idx == 0:
-            if not cfg.use_offline_data:
-                print(colored("First episodes data:", "green", attrs=["bold"]), data)
+            print(colored("First episodes data:", "green", attrs=["bold"]), data)
 
             # Evaluate the initial agent
             _ = evaluate(
                 cfg, steps=steps, episode_idx=episode_idx, start_time=start_time
             )
 
-        if not cfg.use_offline_data:
-            ##### Log episode metrics #####
-            num_new_transitions = 0
-            for i in range(env_count):
-                step_count_i = data["next"]["step_count"][i][-1].cpu().sum().item()
-                steps[i] += step_count_i
-                num_new_transitions += step_count_i
+        ##### Log episode metrics #####
+        num_new_transitions = 0
+        for i in range(env_count):
+            step_count_i = data["next"]["step_count"][i][-1].cpu().sum().item()
+            steps[i] += step_count_i
+            num_new_transitions += step_count_i
 
-            episode_rewards = [
-                data["next"]["episode_reward"][i][-1].cpu().item()
-                for i in range(env_count)
-            ]
+        episode_rewards = [
+            data["next"]["episode_reward"][i][-1].cpu().item()
+            for i in range(env_count)
+        ]
 
-            episodic_return_mean = sum(episode_rewards) / env_count
-            if cfg.verbose:
-                logger.info(
-                    f"Episode {episode_idx} | "
-                    f"Env Step {sum(steps)*cfg.action_repeat} | "
-                    f"Train return (mean over envs) {episodic_return_mean:.2f} | "
-                    f"Train return per env {' '.join(map(str, episode_rewards))}"
-                )
-            rollout_metrics = {
-                "episodic_return_mean": episodic_return_mean,
-                "episodic_length": num_new_transitions // env_count,
-                "env_step": sum(steps) * cfg.action_repeat,
-            }
-            rollout_metrics.update({env_name: {} for env_name in env_names})
-            for i in range(env_count):
-                rollout_metrics[env_names[i]]["episodic_return"] = episode_rewards[i]
+        episodic_return_mean = sum(episode_rewards) / env_count
+        if cfg.verbose:
+            logger.info(
+                f"Episode {episode_idx} | "
+                f"Env Step {sum(steps)*cfg.action_repeat} | "
+                f"Train return (mean over envs) {episodic_return_mean:.2f} | "
+                f"Train return per env {' '.join(map(str, episode_rewards))}"
+            )
+        rollout_metrics = {
+            "episodic_return_mean": episodic_return_mean,
+            "episodic_length": num_new_transitions // env_count,
+            "env_step": sum(steps) * cfg.action_repeat,
+        }
+        rollout_metrics.update({env_name: {} for env_name in env_names})
+        for i in range(env_count):
+            rollout_metrics[env_names[i]]["episodic_return"] = episode_rewards[i]
 
-            writer.log_scalar(name="rollout/", value=rollout_metrics)
-        else:
-            for i in range(env_count):
-                steps[i] += 1  # Avoid logging more than once per step
+        writer.log_scalar(name="rollout/", value=rollout_metrics)
 
         ##### Train agent (after collecting some random episodes) #####
-        if cfg.use_offline_data or episode_idx > cfg.random_episodes - 1:
+        if episode_idx > cfg.random_episodes - 1:
             update_start_time = time.time()
             train_metrics = agent.update(
                 replay_buffer=rb, num_new_transitions=num_new_transitions

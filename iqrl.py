@@ -149,12 +149,6 @@ class iQRLConfig:
     use_simnorm: bool = False
     """Dimensionality V of each simplex in SimNorm"""
     simnorm_dim: int = 8
-    """Use offline data to train and use TD3-BC instead of TD3"""
-    use_offline_data: bool = "${use_offline_data}"  # Set from TrainConfig
-    """States are normalized per-task"""
-    normalize_states: bool = "${normalize_states}"  # Set from TrainConfig
-    """When using offline data, this is the only additional parameter (see TD3-BC)"""
-    bc_alpha: float = 2.5
 
     """EXPLORATION NOISE SCHEDULE"""
     """Initial variance"""
@@ -773,8 +767,6 @@ class iQRL(nn.Module):
         self.critic_update_counter = 0
         self.pi_update_counter = 0
 
-        self.state_norm = None  # If cfg.normalize_states==True, will be set later
-
     def encode_obs(self, obs: TensorDictBase, tar: bool = False) -> TensorDictBase:
         if not self.cfg.use_obs_encoder or not self.cfg.use_representation_learning:
             if isinstance(obs, LazyStackedTensorDict):
@@ -1140,11 +1132,7 @@ class iQRL(nn.Module):
         pi_actions = self.encode_action(pi_actions, ctx=ctx)
 
         Q_values = self.Q(z=z, a=pi_actions, ctx=ctx, return_type="avg")
-        if self.cfg.use_offline_data:
-            # Add behavior cloning regularization
-            lmbda = self.cfg.bc_alpha / Q_values.abs().mean().detach()
-            pi_loss = -lmbda * Q_values.mean() + F.mse_loss(pi_actions, batch.actions)
-        elif self.cfg.rl_algo == "TD3":
+        if self.cfg.rl_algo == "TD3":
             pi_loss = -Q_values.mean()
         elif self.cfg.rl_algo == "SAC":
             # Sprinkle some entropy in the mix
@@ -1190,9 +1178,6 @@ class iQRL(nn.Module):
 
         return info
 
-    def set_state_norm(self, state_norm: dict):
-        self.state_norm = state_norm  # (body_id, task_id)->(mean, std)
-
     def get_context(self, obs: TensorDictBase) -> list[torch.Tensor]:
         """
         Returns body and task representation, if available.
@@ -1220,25 +1205,6 @@ class iQRL(nn.Module):
     def select_action(
         self, obs: TensorDictBase, eval_mode: bool = False
     ) -> torch.Tensor:
-        if self.cfg.normalize_states and self.state_norm is not None:
-            # Normalize states (no need to pad though; this will be done by the encoder)
-            use_nested_tensor = isinstance(obs, LazyStackedTensorDict)
-            if use_nested_tensor:
-                state = obs.get_nestedtensor("state")
-            else:
-                state = obs["state"]
-            normalized_states = []
-            num_states = state.size(0)  # This works for both tensor and nested tensor
-            for i in range(num_states):
-                body_id = np.argmax(obs["body_id"][i]).item()
-                task_id = np.argmax(obs["task_id"][i]).item()
-                mean, std = self.state_norm[(body_id, task_id)]
-                normalized_states.append((state[i] - mean) / std)
-            if use_nested_tensor:
-                obs["state"] = torch.nested.nested_tensor(normalized_states)
-            else:
-                obs["state"] = torch.stack(normalized_states)
-
         is_flat_obs = False
         if obs.batch_size == torch.Size([]):
             obs = obs.view(1)
