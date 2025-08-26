@@ -68,7 +68,6 @@ class TrainConfig:
     visualize_latent_actions: bool = False  # Visualize latent action space using t-SNE
     visualize_body_embeddings: bool = False  # Visualize body embeddings using t-SNE
     visualize_task_embeddings: bool = False  # Visualize task embeddings using t-SNE
-    verify_dyn_and_rew: bool = False  # Run dynamics for long and check rewards
     get_embedding_cosine: bool = False
 
     # W&B config
@@ -159,7 +158,6 @@ def train(cfg: TrainConfig):
     assert cfg.agent.rl_algo in ["TD3", "SAC"], "Only TD3 and SAC are supported"
     assert cfg.agent.obs_types == ["state"], "Only obs_types=['state'] is supported"
     assert cfg.agent.enc_update_freq == 1, "enc_update_freq!=1 currently not supported"
-    assert not cfg.verify_dyn_and_rew or cfg.agent.use_rew_loss, "Can't verify reward"
     if cfg.visualize_body_embeddings or cfg.visualize_task_embeddings:
         assert cfg.agent.context_dim is not None, "No embeddings found to visualize"
     if not cfg.agent.use_representation_learning:
@@ -368,8 +366,6 @@ def train(cfg: TrainConfig):
             if cfg.log_per_task_sa:
                 all_states = {env_names[i]: [] for i in range(env_count)}
                 all_actions = {env_names[i]: [] for i in range(env_count)}
-            if cfg.verify_dyn_and_rew:
-                eval_datas = []
 
             for _ in range(cfg.num_eval_episodes):
                 eval_data = eval_env.rollout(
@@ -393,8 +389,6 @@ def train(cfg: TrainConfig):
                     for task_i, env_name in enumerate(env_names):
                         all_states[env_name].append(states[task_i].cpu())
                         all_actions[env_name].append(actions[task_i].cpu())
-                if cfg.verify_dyn_and_rew:
-                    eval_datas.append(eval_data)
 
             for task_i, env_name in enumerate(env_names):
                 ep_return = sum(episodic_returns[env_name]) / cfg.num_eval_episodes
@@ -551,88 +545,6 @@ def train(cfg: TrainConfig):
                         body_emb = agent.encoder._body_emb(body_ids).cpu().numpy()
                         log_tsne(body_emb, "Embodiment", "Body embeddings")
 
-        ##### If desired, log how well the dynamics and reward model are working #####
-        if cfg.verify_dyn_and_rew:
-            max_t = cfg.max_episode_steps // cfg.action_repeat
-            rew_mses = np.empty((env_count, max_t, cfg.num_eval_episodes))
-            true_rews = np.empty((env_count, max_t, cfg.num_eval_episodes))
-
-            for i, data in enumerate(eval_datas):
-                rew_target = data["next"]["reward"]  # Shape: (env count, max_t, 1)
-                true_rews[:, :, i] = rew_target.view((env_count, max_t))
-
-                # Extract actions with shape (env count, max_t, max_act_dim)
-                if isinstance(data, TensorDict):
-                    actions = data["action"]
-                else:
-                    actions = data.get_nestedtensor("action")
-                    actions = torch.nested.to_padded_tensor(actions, padding=0.0)
-
-                # Encode initial env observation; z.shape is (env_count, L)
-                z = agent.encode_obs(data["observation"][:, 0])["codes"]
-
-                # Predict next max_t latent states and calculate reward diff on the way
-                ctx_t = agent.get_context(data["observation"][..., 0])
-                for t in range(max_t):
-                    rew_pred_t = agent.encoder.reward(z, actions[:, t], ctx_t).detach()
-                    if cfg.agent.Q_and_rew_loss == "soft-ce":
-                        rew_pred_t = h.two_hot_inv(rew_pred_t, cfg.agent)
-                    rew_mses[:, t, i] = ((rew_pred_t - rew_target[:, t]) ** 2).squeeze()
-
-                    # Use dynamics model to move on to next latent observation
-                    z = agent.encoder.trans(z, actions[:, t], ctx_t)["codes"]
-
-            true_rews = true_rews.mean(axis=-1)
-            rew_mses = rew_mses.mean(axis=-1)  # New shape: (env_count, max_t)
-
-            # Plot result (1 line per env)
-            df = pd.DataFrame(rew_mses)
-            df["env"] = df.index  # add an environment label
-            df_long = df.melt(id_vars="env", var_name="time", value_name="value")
-            df_long["time"] = df_long["time"].astype(int)
-            df_long["env_name"] = df_long["env"].map(lambda i: env_names[i])
-
-            if cfg.checkpoint is None:
-                run_id = "No checkpoint"
-            else:
-                run_id = cfg.checkpoint.split("/")[-3]  # YYYY-MM-DD
-
-            plt.figure(figsize=(10, 6))
-            sns.lineplot(
-                data=df_long, x="time", y="value", hue="env_name", palette="tab10"
-            )
-            plt.xlabel("Env step")
-            plt.ylabel("(rew_true - rew_pred)**2")
-            plt.title(
-                f"{run_id}: Reward discrepancy (avg. over {cfg.num_eval_episodes} eps.)"
-            )
-            plt.legend(title="Env")
-            plt.tight_layout()
-
-            plt.savefig("dyn_and_rew_check.pdf", format="pdf")
-            plt.close()
-
-            # Also plot true rewards
-            df = pd.DataFrame(true_rews)
-            df["env"] = df.index  # add an environment label
-            df_long = df.melt(id_vars="env", var_name="time", value_name="value")
-            df_long["time"] = df_long["time"].astype(int)
-            df_long["env_name"] = df_long["env"].map(lambda i: env_names[i])
-            plt.figure(figsize=(10, 6))
-            sns.lineplot(
-                data=df_long, x="time", y="value", hue="env_name", palette="tab10"
-            )
-            plt.xlabel("Env step")
-            plt.ylabel("rew_true")
-            plt.title(
-                f"{run_id}: true rewards (avg. over {cfg.num_eval_episodes} eps.)"
-            )
-            plt.legend(title="Env")
-            plt.tight_layout()
-
-            plt.savefig("true_rews.pdf", format="pdf")
-            plt.close()
-
         ##### Log rank of latent and active codebook percent #####
         if cfg.agent.use_representation_learning:
             batch = rb.sample(batch_size=agent.encoder.cfg.latent_dim)
@@ -642,7 +554,6 @@ def train(cfg: TrainConfig):
         writer.log_scalar(name="eval/", value=eval_metrics)
         return eval_metrics
 
-    
     steps = [0 for _ in range(env_count)]  # Some envs might step more than others
     start_time = time.time()
     for episode_idx in range(cfg.num_episodes):
@@ -673,8 +584,7 @@ def train(cfg: TrainConfig):
             num_new_transitions += step_count_i
 
         episode_rewards = [
-            data["next"]["episode_reward"][i][-1].cpu().item()
-            for i in range(env_count)
+            data["next"]["episode_reward"][i][-1].cpu().item() for i in range(env_count)
         ]
 
         episodic_return_mean = sum(episode_rewards) / env_count
