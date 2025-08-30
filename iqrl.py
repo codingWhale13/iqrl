@@ -155,7 +155,7 @@ class Actor(nn.Module):
         self,
         cfg: iQRLConfig,
         obs_dim: int,
-        ctx_dim: Optional[int],
+        ctx_dim: int,
         act_dim: int,
         action_scale: float,
         action_bias: float,
@@ -182,7 +182,7 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, cfg: iQRLConfig, in_dim: int, ctx_dim: Optional[int]):
+    def __init__(self, cfg: iQRLConfig, in_dim: int, ctx_dim: int):
         super().__init__()
         self.cfg = cfg
 
