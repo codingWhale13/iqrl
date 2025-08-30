@@ -154,7 +154,6 @@ class NormedContextLinear(ContextLinear):
         ctx_dim: int = 0,
         norm_mode: Optional[str] = None,  # None, "ln", "cln", "aln", or "FiLM"
         act_fn=nn.Mish(inplace=True),
-        norm_after_act: bool = True,
         **kwargs,
     ):
         super().__init__(*args, ctx_dim=ctx_dim, **kwargs)
@@ -175,14 +174,10 @@ class NormedContextLinear(ContextLinear):
                 f"norm_mode can be None, 'ln', 'cln', 'aln', or 'FiLM', not {norm_mode}"
             )
         self.act_fn = act_fn
-        self.norm_after_act = norm_after_act
 
     def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]) -> torch.Tensor:
         x = super().forward(x, ctx)
-        if self.norm_after_act:
-            return self.norm(self.act_fn(x), ctx)
-        else:
-            return self.act_fn(self.norm(x, ctx))
+        return self.act_fn(self.norm(x, ctx))
 
     def __repr__(self):
         if self.norm_mode is None:
@@ -219,7 +214,6 @@ def mlp(
     condition_layer: Optional[str] = None,  # None, "first", or "all"
     norm_mode: Optional[str] = None,  # None, "ln", "cln", "aln", or "FiLM"
     act_fn=None,
-    norm_after_act: bool = False,
 ):
     """
     MLP with Mish activations and optionally normalization in hidden layer.
@@ -243,7 +237,6 @@ def mlp(
             dims[1],
             ctx_dim=ctx_dim if condition_layer in ["first", "all"] else 0,
             norm_mode=norm_mode,
-            norm_after_act=norm_after_act,
         )
     )
 
@@ -255,7 +248,6 @@ def mlp(
                 dims[i + 1],
                 ctx_dim=ctx_dim if condition_layer == "all" else 0,
                 norm_mode=norm_mode,
-                norm_after_act=norm_after_act,
             )
         )
 
@@ -267,7 +259,6 @@ def mlp(
             ctx_dim=ctx_dim if condition_layer == "all" else 0,
             norm_mode=norm_mode,
             act_fn=act_fn,
-            norm_after_act=norm_after_act,
         )
         if act_fn is not None
         else ContextLinear(
