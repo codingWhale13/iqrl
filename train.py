@@ -118,11 +118,7 @@ def train(cfg: TrainConfig):
     from hydra.core.hydra_config import HydraConfig
     import numpy as np
     from termcolor import colored
-    from tensordict import (
-        TensorDict,
-        pad_sequence,
-        set_get_defaults_to_none,
-    )
+    from tensordict import pad_sequence, set_get_defaults_to_none
     from tensordict.nn import TensorDictModule
     from torchrl.data.tensor_specs import BoundedContinuous
     from torchrl.envs import ParallelEnv
@@ -145,9 +141,8 @@ def train(cfg: TrainConfig):
     assert cfg.agent.obs_types == ["state"], "Only obs_types=['state'] is supported"
     assert cfg.agent.enc_update_freq == 1, "enc_update_freq!=1 currently not supported"
     if not cfg.agent.use_representation_learning:
-        logger.info("No representation learning => encoders and FSQ will not be used")
+        logger.info("No representation learning => encoder and FSQ will not be used")
         cfg.agent.use_obs_encoder = False
-        cfg.agent.use_action_encoder = False
         cfg.agent.use_fsq = False
 
     ###### Fix seed for reproducibility ######
@@ -225,10 +220,9 @@ def train(cfg: TrainConfig):
         ), "Only continuous actions supported"
         subenv_dummy.close()
 
-    od = [obs_spec["state"].shape[0] for obs_spec in obs_specs]
     ad = [act_spec.shape[0] for act_spec in act_specs]
     create_fn = [
-        partial(fn, obs_dim=od[i], act_dim=ad[i], max_act_dim=max(ad))
+        partial(fn, act_dim=ad[i], max_act_dim=max(ad))
         for i, fn in enumerate(create_fn)
     ]
 
@@ -246,7 +240,6 @@ def train(cfg: TrainConfig):
                     [task_str_to_id[task_names[i]]], device=cfg.device
                 ),
                 record_video=cfg.capture_eval_video,
-                obs_dim=od[i],
                 act_dim=ad[i],
                 max_act_dim=max(ad),
                 **common_kwargs_for_make_env,

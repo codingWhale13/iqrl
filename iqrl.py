@@ -31,8 +31,8 @@ class iQRLConfig:
 
     """Map environment states to latent states before using them in other components"""
     use_obs_encoder: bool = True  # Used in original iQRL, thus defaults to True
-    """Condition {encoders, transition dynamics, actor, critic} on body & task IDs"""
-    condition_encoders: bool = True
+    """Condition {encoder, transition dynamics, actor, critic} on body & task IDs"""
+    condition_encoder: bool = True
     condition_dynamics: bool = True
     condition_actor: bool = True
     condition_critic: bool = True
@@ -61,8 +61,6 @@ class iQRLConfig:
     q_sample_size: int = 2
     """In critic update, next_s can be "encoded" (as in iQRL) or "rollout\""""
     critic_next_s: str = "encoded"
-    """Use embodiment context? (task context is always used)"""
-    use_embodiment_context: bool = True
     """Body and task embedding size; use None for one-hot encoding instead"""
     emb_dim: Optional[int] = 32
     """What observation types to use? ["state"] or ["pixels"] or ["state", "pixels"]"""
@@ -278,7 +276,6 @@ class Encoder(nn.Module):
         obs_dim: int,
         act_dim: int,
         latent_obs_dim: int,
-        latent_act_dim: int,
         ctx_dim: int,
         org_latent_dim: int,
         n_body: int,
@@ -295,10 +292,9 @@ class Encoder(nn.Module):
             self._task_emb = nn.Embedding(
                 self.n_task, cfg.emb_dim, max_norm=1, device=self.cfg.device
             )
-            if cfg.use_embodiment_context:
-                self._body_emb = nn.Embedding(
-                    self.n_body, cfg.emb_dim, max_norm=1, device=self.cfg.device
-                )
+            self._body_emb = nn.Embedding(
+                self.n_body, cfg.emb_dim, max_norm=1, device=self.cfg.device
+            )
 
         ##### Configure FSQ stuff #####
         self.org_latent_dim = org_latent_dim
@@ -306,7 +302,7 @@ class Encoder(nn.Module):
         if cfg.use_fsq:
             self._fsq = h.FSQ(levels=cfg.fsq_levels)
 
-        ##### Init encoders #####
+        ##### Init encoder #####
         self._encoder = nn.ModuleDict()
         if "state" in cfg.obs_types and cfg.use_obs_encoder:
             self._encoder["state"] = h.mlp(
@@ -314,7 +310,7 @@ class Encoder(nn.Module):
                 mlp_dims=cfg.enc_mlp_dims,
                 out_dim=latent_obs_dim,
                 ctx_dim=ctx_dim,
-                condition_layer=cfg.condition_layer if cfg.condition_encoders else None,
+                condition_layer=cfg.condition_layer if cfg.condition_encoder else None,
                 norm_mode=cfg.norm_mode,
             )
         if cfg.use_tar_enc:
@@ -328,7 +324,7 @@ class Encoder(nn.Module):
                 assert cfg.use_fsq
                 trans_out_dim = int(self.org_latent_dim * self._fsq.codebook_size)
         self._trans = h.mlp(
-            in_dim=latent_obs_dim + latent_act_dim,
+            in_dim=latent_obs_dim + act_dim,
             mlp_dims=cfg.mlp_dims,
             out_dim=trans_out_dim,
             ctx_dim=ctx_dim,
@@ -339,7 +335,7 @@ class Encoder(nn.Module):
         ##### Init optional reward model #####
         if cfg.use_rew_loss:
             self._reward = h.mlp(
-                in_dim=latent_obs_dim + latent_act_dim,
+                in_dim=latent_obs_dim + act_dim,
                 mlp_dims=cfg.mlp_dims,
                 out_dim=1 if cfg.Q_and_rew_loss == "mse" else cfg.num_bins,
                 ctx_dim=ctx_dim,
@@ -352,8 +348,6 @@ class Encoder(nn.Module):
         Returns body and task representation, if available.
         The representations will be one-hot if context_dim is None, embeddings otherwise.
         """
-
-        context = []
         body_id = obs.get("body_id")
         task_id = obs.get("task_id")
         if body_id is not None:
@@ -363,18 +357,13 @@ class Encoder(nn.Module):
 
         if self.cfg.emb_dim is None:
             # Use one-hot encoding
-            if body_id is not None and self.cfg.use_embodiment_context:
-                body = nn.functional.one_hot(body_id, self.n_body).to(self.cfg.device)
-                context.append(body)
-            if task_id is not None:
-                task = nn.functional.one_hot(task_id, self.n_task).to(self.cfg.device)
-                context.append(task)
+            body = nn.functional.one_hot(body_id, self.n_body).to(self.cfg.device)
+            task = nn.functional.one_hot(task_id, self.n_task).to(self.cfg.device)
         else:
             # Use embedding
-            if body_id is not None and self.cfg.use_embodiment_context:
-                context.append(self._body_emb(body_id).to(self.cfg.device))
-            if task_id is not None:
-                context.append(self._task_emb(task_id).to(self.cfg.device))
+            body = self._body_emb(body_id).to(self.cfg.device)
+            task = self._task_emb(task_id).to(self.cfg.device)
+        context = [body, task]
 
         return context
 
@@ -640,27 +629,21 @@ class iQRL(nn.Module):
         self.act_dims = [np.prod(act_spec.shape).item() for act_spec in act_specs]
         self.act_dim = max(self.act_dims)
 
-        keys = ["task_id"] if "task_id" in obs_specs[0].keys() else []
-        if "body_id" in obs_specs[0].keys() and cfg.use_embodiment_context:
-            keys.append("body_id")
-
         if cfg.emb_dim is None:  # IDs will be one-hot encoded
-            ctx_dim = n_body * ("body_id" in keys) + n_task * ("task_id" in keys)
+            ctx_dim = n_body + n_task
         else:  # IDs will be embedded
-            ctx_dim = cfg.emb_dim * len(keys)
+            ctx_dim = cfg.emb_dim * 2
 
         ##### Calculate dimensions of (optional) latent spaces #####
         latent_obs_dim = cfg.latent_dim if cfg.use_obs_encoder else self.obs_dim
-        latent_act_dim = self.act_dim
 
-        ##### Init encoders, dynamics, and optionally reward model #####
+        ##### Init encoder, dynamics, and optionally reward model #####
         if cfg.use_representation_learning:
             self.encoder = Encoder(
                 cfg,
                 obs_dim=self.obs_dim,
                 act_dim=self.act_dim,
                 latent_obs_dim=latent_obs_dim,
-                latent_act_dim=latent_act_dim,
                 ctx_dim=ctx_dim,
                 org_latent_dim=org_latent_dim,
                 n_body=n_body,
@@ -683,7 +666,7 @@ class iQRL(nn.Module):
         self._pi_tar = torch.compile(pi_tar, mode="default") if cfg.compile else pi_tar
 
         ##### Init critics and their target networks #####
-        Q = Critic(cfg, in_dim=latent_obs_dim + latent_act_dim, ctx_dim=ctx_dim).to(
+        Q = Critic(cfg, in_dim=latent_obs_dim + self.act_dim, ctx_dim=ctx_dim).to(
             cfg.device
         )
         self.Q = torch.compile(Q, mode="default") if cfg.compile else Q
@@ -713,7 +696,7 @@ class iQRL(nn.Module):
 
         ##### Automatic entropy tuning #####
         if cfg.rl_algo == "SAC" and cfg.sac_autotune:
-            self.target_entropy = -act_dim
+            self.target_entropy = -self.act_dim
             self.sac_log_alpha = torch.zeros(1, requires_grad=True, device=cfg.device)
             self.sac_alpha = self.sac_log_alpha.exp().item()
             self.sac_alpha_optimizer = torch.optim.Adam(

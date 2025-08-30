@@ -31,23 +31,17 @@ class BodyAndTaskIDs(Transform):
     """A transform to add one-hot encoded body and/or task IDs to an env."""
 
     def __init__(
-        self,
-        body_id: Optional[torch.Tensor] = None,
-        task_id: Optional[torch.Tensor] = None,
-        n_body: Optional[int] = None,
-        n_task: Optional[int] = None,
+        self, body_id: torch.Tensor, task_id: torch.Tensor, n_body: int, n_task: int
     ):
         super().__init__()
-        self.n_body = n_body
-        self.n_task = n_task
         self.body_id = body_id
         self.task_id = task_id
+        self.n_body = n_body
+        self.n_task = n_task
 
     def _call(self, tensordict: TensorDictBase) -> TensorDictBase:
-        if self.body_id is not None:
-            tensordict["observation"].set("body_id", self.body_id)
-        if self.task_id is not None:
-            tensordict["observation"].set("task_id", self.task_id)
+        tensordict["observation"].set("body_id", self.body_id)
+        tensordict["observation"].set("task_id", self.task_id)
         return tensordict
 
     def _reset(
@@ -56,20 +50,18 @@ class BodyAndTaskIDs(Transform):
         return self._call(tensordict_reset)
 
     def transform_observation_spec(self, observation_spec: Composite) -> Composite:
-        if self.body_id is not None:
-            observation_spec["observation"]["body_id"] = Categorical(
-                n=self.n_body,
-                shape=self.body_id.shape,
-                dtype=torch.float,
-                device=observation_spec.device,
-            )
-        if self.task_id is not None:
-            observation_spec["observation"]["task_id"] = Categorical(
-                n=self.n_task,
-                shape=self.task_id.shape,
-                dtype=torch.float,
-                device=observation_spec.device,
-            )
+        observation_spec["observation"]["body_id"] = Categorical(
+            n=self.n_body,
+            shape=self.body_id.shape,
+            dtype=torch.float,
+            device=observation_spec.device,
+        )
+        observation_spec["observation"]["task_id"] = Categorical(
+            n=self.n_task,
+            shape=self.task_id.shape,
+            dtype=torch.float,
+            device=observation_spec.device,
+        )
         return observation_spec
 
     def forward(self, tensordict: TensorDictBase) -> TensorDictBase:
@@ -113,15 +105,13 @@ class TaskMasker(Transform):
 
 def make_env(
     env_name: str,
-    task_name: Optional[str] = None,
-    body_id: Optional[torch.Tensor] = None,
-    task_id: Optional[torch.Tensor] = None,
-    n_body: Optional[int] = None,
-    n_task: Optional[int] = None,
-    obs_dim: Optional[int] = None,
+    task_name: str,
+    body_id: torch.Tensor,
+    task_id: torch.Tensor,
+    n_body: int,
+    n_task: int,
     act_dim: Optional[int] = None,
     max_act_dim: Optional[int] = None,
-    use_offline_data: bool = False,
     seed: int = 42,
     from_pixels: bool = True,
     frame_skip: int = 2,
@@ -135,7 +125,7 @@ def make_env(
     if not from_pixels:
         pixels_only = False
 
-    elif env_name in gym.envs.registry.keys():
+    if env_name in gym.envs.registry.keys():
         env = GymEnv(
             env_name=env_name,
             from_pixels=from_pixels,

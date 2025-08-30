@@ -151,7 +151,7 @@ class NormedContextLinear(ContextLinear):
     def __init__(
         self,
         *args,
-        ctx_dim: int = 0
+        ctx_dim: int = 0,
         norm_mode: Optional[str] = None,  # None, "ln", "cln", "aln", or "FiLM"
         act_fn=nn.Mish(inplace=True),
         norm_after_act: bool = True,
@@ -233,7 +233,6 @@ def mlp(
     if isinstance(mlp_dims, int):
         mlp_dims = [mlp_dims]
 
-    use_cln = norm_mode == "cln"
     dims = [int(in_dim)] + mlp_dims + [int(out_dim)]
     mlp = nn.ModuleList()
 
@@ -247,27 +246,23 @@ def mlp(
             norm_after_act=norm_after_act,
         )
     )
-    add_to_in_dim = 0  # Conditioning LayerNorm changes outgoing dims of layers
-    if condition_layer in ["first", "all"] and use_cln:
-        add_to_in_dim = ctx_dim
 
     # Add hidden layer(s)
     for i in range(1, len(dims) - 2):
         mlp.append(
             NormedContextLinear(
-                dims[i] + add_to_in_dim,
+                dims[i],
                 dims[i + 1],
                 ctx_dim=ctx_dim if condition_layer == "all" else 0,
                 norm_mode=norm_mode,
                 norm_after_act=norm_after_act,
             )
         )
-        add_to_in_dim = ctx_dim if (condition_layer == "all" and use_cln) else 0
 
     # Add output layer
     mlp.append(
         NormedContextLinear(
-            dims[-2] + add_to_in_dim,
+            dims[-2],
             dims[-1],
             ctx_dim=ctx_dim if condition_layer == "all" else 0,
             norm_mode=norm_mode,
@@ -276,7 +271,7 @@ def mlp(
         )
         if act_fn is not None
         else ContextLinear(
-            in_dim=dims[-2] + add_to_in_dim,
+            in_dim=dims[-2],
             out_dim=dims[-1],
             ctx_dim=ctx_dim if condition_layer == "all" else 0,
         )
