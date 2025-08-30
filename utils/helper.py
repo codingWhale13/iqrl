@@ -213,7 +213,6 @@ def mlp(
     ctx_dim: int = 0,
     condition_layer: Optional[str] = None,  # None, "first", or "all"
     norm_mode: Optional[str] = None,  # None, "ln", "cln", "aln", or "FiLM"
-    act_fn=None,
 ):
     """
     MLP with Mish activations and optionally normalization in hidden layer.
@@ -253,15 +252,7 @@ def mlp(
 
     # Add output layer
     mlp.append(
-        NormedContextLinear(
-            dims[-2],
-            dims[-1],
-            ctx_dim=ctx_dim if condition_layer == "all" else 0,
-            norm_mode=norm_mode,
-            act_fn=act_fn,
-        )
-        if act_fn is not None
-        else ContextLinear(
+        ContextLinear(
             in_dim=dims[-2],
             out_dim=dims[-1],
             ctx_dim=ctx_dim if condition_layer == "all" else 0,
