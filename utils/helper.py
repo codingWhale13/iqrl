@@ -43,26 +43,6 @@ class FSQ(_FSQ):
         return f"FSQ(levels={self.levels})"
 
 
-class SimNorm(nn.Module):
-    """
-    Simplicial normalization.
-    Adapted from https://arxiv.org/abs/2204.00616.
-    """
-
-    def __init__(self, cfg):
-        super().__init__()
-        self.dim = cfg.simnorm_dim
-
-    def forward(self, x):
-        shp = x.shape
-        x = x.view(*shp[:-1], -1, self.dim)
-        x = nn.functional.softmax(x, dim=-1)
-        return x.view(*shp)
-
-    def __repr__(self):
-        return f"SimNorm(dim={self.dim})"
-
-
 class ContextLinear(nn.Linear):
     """
     Linear layer which can use context as a second input, if desired.
@@ -191,7 +171,7 @@ class NormedContextLinear(ContextLinear):
         elif norm_mode == "FiLM":  # FiLM
             self.norm = FiLM(self.out_features, ctx_dim=ctx_dim)
         elif norm_mode is None:
-            self.norm = lambda x, _: x  # Ignore context (second argument)
+            self.norm = lambda x, _: x  # Ignore context (second argument), don't use LN
         else:
             raise NotImplementedError(
                 f"norm_mode can be None, 'ln', 'cln', 'aln', or 'FiLM', not {norm_mode}"
@@ -436,19 +416,6 @@ def seq_to_id(keys: Sequence[str]) -> dict[str, int]:
             str_to_id[key] = next_id
             next_id += 1
     return str_to_id
-
-
-def seq_to_id_naive(keys: Sequence[str]) -> tuple[list, dict[str, int]]:
-    """Returns mapping from string identifiers to IDs.
-    The twist: Keeps on handing out new ideas, even to already-seen keys
-    The order of the input sequence determines the ordering of the IDs."""
-    str_to_id = {}
-    keys_modified = []
-    for next_id, key in enumerate(keys):
-        key_naive = f"{key} ({next_id})"  # human-readable + (what the agent sees)
-        str_to_id[key_naive] = next_id
-        keys_modified.append(key_naive)
-    return keys_modified, str_to_id
 
 
 def symlog(x):

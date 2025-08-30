@@ -63,7 +63,6 @@ class TrainConfig:
     capture_eval_video: bool = False  # Fails on AMD GPU so set to False
     log_per_task_sa: bool = False  # Log task-specific state & act ranges
     log_per_task_q: bool = False  # Log task-specific Q-values
-    get_embedding_cosine: bool = False
 
     # W&B config
     use_wandb: bool = False
@@ -118,14 +117,9 @@ def train(cfg: TrainConfig):
     from functools import partial
 
     from hydra.core.hydra_config import HydraConfig
-    import matplotlib.pyplot as plt
     import numpy as np
-    import pandas as pd
-    import seaborn as sns
-    from sklearn.manifold import TSNE
     from termcolor import colored
     from tensordict import (
-        LazyStackedTensorDict,
         TensorDict,
         pad_sequence,
         set_get_defaults_to_none,
@@ -135,7 +129,6 @@ def train(cfg: TrainConfig):
     from torchrl.envs import ParallelEnv
     from torchrl.record.loggers.wandb import WandbLogger
     import torch
-    import wandb
 
     from envs import make_env
     from iqrl import iQRL
@@ -313,23 +306,6 @@ def train(cfg: TrainConfig):
         in_keys=["observation"],
         out_keys=["action"],
     )
-
-    from sklearn.metrics.pairwise import cosine_similarity
-
-    def cos_sim(a, b):
-        a = a[0].flatten()
-        b = b[0].flatten()
-        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-    if cfg.get_embedding_cosine:
-        task_ids = torch.arange(n_task).long().to(cfg.device)
-        task_emb = agent.encoder._task_emb(task_ids).detach().cpu().numpy()
-
-        for i in range(n_task):
-            for j in range(i + 1, n_task):
-                cs = cos_sim([task_emb[i]], [task_emb[j]])
-                print(env_names[i], env_names[j], cs)
-        exit()
 
     ##### Print information about run #####
     mstep = (cfg.num_episodes * cfg.max_episode_steps) / 1e6
