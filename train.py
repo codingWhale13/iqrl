@@ -61,7 +61,6 @@ class TrainConfig:
     eval_every_episodes: int = 20
     num_eval_episodes: int = 10
     capture_eval_video: bool = False  # Fails on AMD GPU so set to False
-    log_per_task_sa: bool = False  # Log task-specific state & act ranges
     log_per_task_q: bool = False  # Log task-specific Q-values
 
     # W&B config
@@ -327,10 +326,6 @@ def train(cfg: TrainConfig):
         eval_start_time = time.time()
         with torch.no_grad():
             episodic_returns = {env_name: [] for env_name in env_names}
-            if cfg.log_per_task_sa:
-                all_states = {env_names[i]: [] for i in range(env_count)}
-                all_actions = {env_names[i]: [] for i in range(env_count)}
-
             for _ in range(cfg.num_eval_episodes):
                 eval_data = eval_env.rollout(
                     max_steps=cfg.max_episode_steps // cfg.action_repeat,
@@ -343,17 +338,6 @@ def train(cfg: TrainConfig):
                         eval_data["next"]["episode_reward"][task_i][-1].cpu().item()
                     )
 
-                if cfg.log_per_task_sa:
-                    if isinstance(eval_data, TensorDict):
-                        states = eval_data["observation"]["state"]
-                        actions = eval_data["action"]
-                    else:
-                        states = eval_data["observation"].get_nestedtensor("state")
-                        actions = eval_data.get_nestedtensor("action")
-                    for task_i, env_name in enumerate(env_names):
-                        all_states[env_name].append(states[task_i].cpu())
-                        all_actions[env_name].append(actions[task_i].cpu())
-
             for task_i, env_name in enumerate(env_names):
                 ep_return = sum(episodic_returns[env_name]) / cfg.num_eval_episodes
                 eval_metrics[env_name]["episodic_return"] = ep_return
@@ -363,37 +347,12 @@ def train(cfg: TrainConfig):
             )
 
         ##### Task-specific training metrics #####
-        if cfg.log_per_task_sa or cfg.log_per_task_q:
+        if cfg.log_per_task_q:
             for task_i in range(env_count):
                 task_metrics = agent.update(
                     replay_buffer=rb, num_new_transitions=500, fake=True, rb_idx=task_i
                 )
                 task_metrics["env_step"] = steps[task_i] * cfg.action_repeat
-
-                if cfg.log_per_task_sa:
-                    task_states = np.array(all_states[env_names[task_i]])
-                    for dim in range(task_states.shape[-1]):
-                        states_single = task_states[..., dim]
-                        task_metrics.update(
-                            {
-                                f"state_min_{dim=}": states_single.min().item(),
-                                f"state_max_{dim=}": states_single.max().item(),
-                                f"state_mean_{dim=}": states_single.mean().item(),
-                                f"state_std_{dim=}": states_single.std().item(),
-                            }
-                        )
-                    task_actions = np.array(all_actions[env_names[task_i]])
-                    for dim in range(task_actions.shape[-1]):
-                        actions_single = task_actions[..., dim]
-                        task_metrics.update(
-                            {
-                                f"action_min_{dim=}": actions_single.min().item(),
-                                f"action_max_{dim=}": actions_single.max().item(),
-                                f"action_mean_{dim=}": actions_single.mean().item(),
-                                f"action_std_{dim=}": actions_single.std().item(),
-                            }
-                        )
-
                 writer.log_scalar(name=f"{env_names[task_i]}/", value=task_metrics)
 
         ##### Overall eval metrics #####
