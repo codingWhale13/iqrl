@@ -140,7 +140,7 @@ class NormedContextLinear(ContextLinear):
     Linear layer, allowing:
     - Context to be concatenated to input tensor.
     - Normalization of the activations.
-    Uses Mish activation by default, and optionally dropout.
+    Uses Mish activation by default.
 
     Adapted from https://github.com/tdmpc2/tdmpc2-eval/blob/main/helper.py
 
@@ -151,8 +151,7 @@ class NormedContextLinear(ContextLinear):
     def __init__(
         self,
         *args,
-        ctx_dim: int = 0,
-        dropout=0.0,
+        ctx_dim: int = 0
         norm_mode: Optional[str] = None,  # None, "ln", "cln", "aln", or "FiLM"
         act_fn=nn.Mish(inplace=True),
         norm_after_act: bool = True,
@@ -160,7 +159,6 @@ class NormedContextLinear(ContextLinear):
     ):
         super().__init__(*args, ctx_dim=ctx_dim, **kwargs)
         self.ctx_dim = ctx_dim
-        self.dropout = nn.Dropout(dropout, inplace=True) if dropout else None
         self.norm_mode = norm_mode
         if norm_mode == "ln":  # LayerNorm, no context-conditioning
             self.norm = ContextLayerNorm(self.out_features, ctx_dim=0)
@@ -181,15 +179,12 @@ class NormedContextLinear(ContextLinear):
 
     def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]) -> torch.Tensor:
         x = super().forward(x, ctx)
-        if self.dropout:
-            x = self.dropout(x)
         if self.norm_after_act:
             return self.norm(self.act_fn(x), ctx)
         else:
             return self.act_fn(self.norm(x, ctx))
 
     def __repr__(self):
-        repr_dropout = f", dropout={self.dropout.p}" if self.dropout else ""
         if self.norm_mode is None:
             norm_mode = "Identity"
         elif self.norm_mode == "ln":
@@ -205,7 +200,7 @@ class NormedContextLinear(ContextLinear):
         return f"{norm_mode}(in_features={self.in_features}, \
         out_features={self.out_features}, \
         ctx_dim={self.ctx_dim}, \
-        bias={self.bias is not None}{repr_dropout}, \
+        bias={self.bias is not None}, \
         act={self.act_fn.__class__.__name__})"
 
 
@@ -221,16 +216,13 @@ def mlp(
     mlp_dims: Union[int, list[int]],
     out_dim: int,
     ctx_dim: int = 0,
-    dropout=0.0,
     condition_layer: Optional[str] = None,  # None, "first", or "all"
     norm_mode: Optional[str] = None,  # None, "ln", "cln", "aln", or "FiLM"
     act_fn=None,
     norm_after_act: bool = False,
 ):
     """
-    MLP with Mish activations and optionally:
-    - Use dropout in first layer.
-    - Use normalization in hidden layer.
+    MLP with Mish activations and optionally normalization in hidden layer.
 
     Adapted from https://github.com/tdmpc2/tdmpc2-eval/blob/main/helper.py
 
@@ -251,7 +243,6 @@ def mlp(
             dims[0],
             dims[1],
             ctx_dim=ctx_dim if condition_layer in ["first", "all"] else 0,
-            dropout=dropout,
             norm_mode=norm_mode,
             norm_after_act=norm_after_act,
         )

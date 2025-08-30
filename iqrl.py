@@ -107,10 +107,6 @@ class iQRLConfig:
     use_tar_enc: bool = True
     """Predict change in latent or next latent? i.e. next_z = z + f(z, a) else next_z = f(z, a)"""
     use_delta: bool = True
-    """(Optionally) use dropout for critic"""
-    q_dropout: float = 0.0
-    """(Optionally) use dropout for MLP encoder"""
-    enc_dropout: float = 0.0
     """Use temporal consistency loss for representation learning"""
     use_tc_loss: bool = True
     """Use reward prediction for representation learning"""
@@ -236,7 +232,6 @@ class Critic(nn.Module):
                 ctx_dim=ctx_dim,
                 condition_layer=cfg.condition_layer if cfg.condition_critic else None,
                 norm_mode=cfg.norm_mode,
-                dropout=cfg.q_dropout,
             ).to(cfg.device)
             for _ in range(cfg.num_critics)
         ]
@@ -321,7 +316,6 @@ class Encoder(nn.Module):
                 ctx_dim=ctx_dim,
                 condition_layer=cfg.condition_layer if cfg.condition_encoders else None,
                 norm_mode=cfg.norm_mode,
-                dropout=cfg.enc_dropout,
             )
         if cfg.use_tar_enc:
             self._encoder_tar = copy.deepcopy(self._encoder).requires_grad_(False)
