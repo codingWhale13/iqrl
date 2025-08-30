@@ -64,7 +64,7 @@ class iQRLConfig:
     """Use embodiment context? (task context is always used)"""
     use_embodiment_context: bool = True
     """Body and task embedding size; use None for one-hot encoding instead"""
-    context_dim: Optional[int] = None  # Sensible default for embedding size: 96
+    emb_dim: Optional[int] = 32
     """What observation types to use? ["state"] or ["pixels"] or ["state", "pixels"]"""
     obs_types: List[str] = field(default_factory=lambda: ["state"])
     """Which model-free RL algorithm to use, TD3 or SAC"""
@@ -143,7 +143,7 @@ class iQRLConfig:
     use_fsq: bool = True
     """FSQ levels - setting as [8,8] corresponds to a codebook of size 8*8=62=2^8"""
     fsq_levels: List[int] = field(default_factory=lambda: [8, 8])
-    
+
     """EXPLORATION NOISE SCHEDULE"""
     """Initial variance"""
     exploration_noise_start: float = 1.0
@@ -296,13 +296,13 @@ class Encoder(nn.Module):
         ##### Prepare for adding body and task context (either 1-hot or embedded) #####
         self.n_body = n_body
         self.n_task = n_task
-        if cfg.context_dim is not None:
+        if cfg.emb_dim is not None:
             self._task_emb = nn.Embedding(
-                self.n_task, cfg.context_dim, max_norm=1, device=self.cfg.device
+                self.n_task, cfg.emb_dim, max_norm=1, device=self.cfg.device
             )
             if cfg.use_embodiment_context:
                 self._body_emb = nn.Embedding(
-                    self.n_body, cfg.context_dim, max_norm=1, device=self.cfg.device
+                    self.n_body, cfg.emb_dim, max_norm=1, device=self.cfg.device
                 )
 
         ##### Configure FSQ stuff #####
@@ -367,7 +367,7 @@ class Encoder(nn.Module):
         if task_id is not None:
             task_id = task_id.long().squeeze(-1).to(self.cfg.device)
 
-        if self.cfg.context_dim is None:
+        if self.cfg.emb_dim is None:
             # Use one-hot encoding
             if body_id is not None and self.cfg.use_embodiment_context:
                 body = nn.functional.one_hot(body_id, self.n_body).to(self.cfg.device)
@@ -398,7 +398,7 @@ class Encoder(nn.Module):
         else:
             z = self._encoder["state"](obs_padded, ctx)
         td = TensorDict({"state": z}, batch_size=obs.batch_size)
-        
+
         if not self.cfg.use_obs_encoder:
             return td  # "Identity mapping"
 
@@ -650,10 +650,10 @@ class iQRL(nn.Module):
         if "body_id" in obs_specs[0].keys() and cfg.use_embodiment_context:
             keys.append("body_id")
 
-        if cfg.context_dim is None:  # IDs will be one-hot encoded
+        if cfg.emb_dim is None:  # IDs will be one-hot encoded
             ctx_dim = n_body * ("body_id" in keys) + n_task * ("task_id" in keys)
         else:  # IDs will be embedded
-            ctx_dim = cfg.context_dim * len(keys)
+            ctx_dim = cfg.emb_dim * len(keys)
 
         ##### Calculate dimensions of (optional) latent spaces #####
         latent_obs_dim = cfg.latent_dim if cfg.use_obs_encoder else self.obs_dim
