@@ -248,7 +248,7 @@ class Encoder(nn.Module):
         ##### Prepare for adding body and task context (either 1-hot or embedded) #####
         self.n_body = n_body
         self.n_task = n_task
-        if cfg.emb_dim is not None:
+        if cfg.emb_dim is not None and cfg.cond_mode is not None:
             self._task_emb = nn.Embedding(
                 self.n_task, cfg.emb_dim, max_norm=1, device=self.cfg.device
             )
@@ -305,6 +305,10 @@ class Encoder(nn.Module):
         Returns body and task representation, if available.
         The representations will be one-hot if context_dim is None, embeddings otherwise.
         """
+        # If conditioning is not used, there is no need to provide it
+        if self.cfg.cond_mode is None:
+            return []
+
         body_id = obs.get("body_id")
         task_id = obs.get("task_id")
         if body_id is not None:
