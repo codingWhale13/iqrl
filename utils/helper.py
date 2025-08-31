@@ -45,7 +45,7 @@ class FSQ(_FSQ):
 
 class ContextLinear(nn.Linear):
     """
-    Linear layer which can use context as a second input, if desired.
+    Linear layer which can concatenate context to its input, if desired.
     """
 
     def __init__(self, in_dim: int, out_dim: int, ctx_dim: int = 0, *args, **kwargs):
@@ -60,58 +60,17 @@ class ContextLinear(nn.Linear):
         return super().forward(x)
 
 
-class ContextLayerNorm(nn.LayerNorm):
-    """
-    LayerNorm which can use context as a second input, if desired.
-    """
-
-    def __init__(self, normalized_shape: int, ctx_dim: int = 0, *args, **kwargs):
-        self.use_ctx = ctx_dim > 0
-        if self.use_ctx:
-            normalized_shape += ctx_dim
-        super().__init__(normalized_shape=normalized_shape, *args, **kwargs)
-
-    def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]) -> torch.Tensor:
-        if self.use_ctx:
-            x = torch.cat(ctx + [x], -1)
-        return super().forward(x)
-
-
-class AdaptiveLayerNormOriginal(nn.Module):
-    """
-    Adaptive LayerNorm a.k.a. AdaNorm, as introduced by Xu (2019).
-    Adapted from https://github.com/lancopku/AdaNorm/tree/master/machine%20translation/fairseq/modules/layer_norm.py
-    """
-
-    def __init__(self, eps=1e-5, adanorm_scale=1, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.adanorm_scale = adanorm_scale
-        self.eps = eps
-
-    def forward(self, x: torch.Tensor, _: list[torch.Tensor]) -> torch.Tensor:
-        mean = x.mean(-1, keepdim=True)
-        std = x.std(-1, keepdim=True)
-        x = x - mean
-        mean = x.mean(-1, keepdim=True)
-        graNorm = (1 / 10 * (x - mean) / (std + self.eps)).detach()
-        x_norm = (x - x * graNorm) / (std + self.eps)
-
-        return x_norm * self.adanorm_scale
-
-
 class AdaptiveLayerNorm(nn.Module):
     """
-    Conditional / Adaptive LayerNorm.
-    y = (LN(x, affine=False)) * gamma(ctx) + beta(ctx).
-    Adapted from https://github.com/eloialonso/diamond/blob/main/src/models/blocks.py
+    Adaptive/Conditional LayerNorm.
+    We replace LayerNorm's bias and gain by linear layers, mapping ctx_dim -> layer_dim.
 
-    We replace bias and gain of LayerNorm by linear layers, mapping ctx_dim -> layer_dim
-    NOTE: This is closer to the implementation of LayerNorm than the one of AdaNorm.
+    Adapted from https://github.com/eloialonso/diamond/blob/main/src/models/blocks.py
     """
 
-    def __init__(self, in_dim: int, ctx_dim: int, eps=1e-5, *args, **kwargs) -> None:
+    def __init__(self, in_dim: int, ctx_dim: int, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.ln = nn.LayerNorm(in_dim, eps=eps, elementwise_affine=False)  # No params
+        self.ln = nn.LayerNorm(in_dim, elementwise_affine=False)  # No params
         self.linear = nn.Linear(ctx_dim, in_dim * 2)
 
     def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]) -> torch.Tensor:
@@ -122,9 +81,7 @@ class AdaptiveLayerNorm(nn.Module):
 
 
 class FiLM(nn.Module):
-    """
-    Learning scale and bias based on context. No normalization.
-    """
+    """Learns element-wise scale and bias based on context. No normalization."""
 
     def __init__(self, in_dim: int, ctx_dim: int, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -135,64 +92,64 @@ class FiLM(nn.Module):
         return x * (1 + scale) + shift
 
 
+class LayerNormIgnoringContext(nn.LayerNorm):
+    def forward(self, x, _):
+        return super().forward(x)
+
+
 class NormedContextLinear(ContextLinear):
     """
-    Linear layer, allowing:
-    - Context to be concatenated to input tensor.
-    - Normalization of the activations.
+    Linear layer, which can be context-conditioned with these options for cond_mode:
+    - "AdaLN": Learn bias and gain of LayerNorm from context.
+    - "FiLM": Learn bias and gain of non-normalizing affine transform from context.
+    - "concat": Concatenate context to input tensor.
+    - None: Don't let the context be used in any way by this layer.
+
     Uses Mish activation by default.
 
     Adapted from https://github.com/tdmpc2/tdmpc2-eval/blob/main/helper.py
-
-    If ctx_dim > 0, we concatenate the context to the input of the linear layer.
-    If norm_mode is cln, aln, or FiLM, the normalization also gets context-conditioned.
     """
 
     def __init__(
         self,
         *args,
-        ctx_dim: int = 0,
-        norm_mode: Optional[str] = None,  # None, "ln", "cln", "aln", or "FiLM"
+        cond_mode: Optional[str],
+        ctx_dim: int,  # Where this is used, depends on cond_mode
         act_fn=nn.Mish(inplace=True),
         **kwargs,
     ):
-        super().__init__(*args, ctx_dim=ctx_dim, **kwargs)
+        linear_ctx_dim = ctx_dim if cond_mode == "concat" else 0
+        super().__init__(*args, ctx_dim=linear_ctx_dim, **kwargs)
+
+        self.cond_mode = cond_mode
         self.ctx_dim = ctx_dim
-        self.norm_mode = norm_mode
-        if norm_mode == "ln":  # LayerNorm, no context-conditioning
-            self.norm = ContextLayerNorm(self.out_features, ctx_dim=0)
-        elif norm_mode == "aln":  # Adaptive LayerNorm, no context-conditioning
-            self.norm = AdaptiveLayerNorm(self.out_features, ctx_dim)
-        elif norm_mode == "cln":  # LayerNorm, conditioned on context by concatenation
-            self.norm = ContextLayerNorm(self.out_features, ctx_dim=ctx_dim)
-        elif norm_mode == "FiLM":  # FiLM
-            self.norm = FiLM(self.out_features, ctx_dim=ctx_dim)
-        elif norm_mode is None:
-            self.norm = lambda x, _: x  # Ignore context (second argument), don't use LN
-        else:
-            raise NotImplementedError(
-                f"norm_mode can be None, 'ln', 'cln', 'aln', or 'FiLM', not {norm_mode}"
-            )
         self.act_fn = act_fn
 
+        if cond_mode == "AdaLN":
+            self.norm = AdaptiveLayerNorm(self.out_features, ctx_dim)
+        elif cond_mode == "FiLM":
+            self.norm = FiLM(self.out_features, ctx_dim=ctx_dim)
+        elif cond_mode == "concat" or cond_mode is None:  # Use unconditioned LayerNorm
+            self.norm = LayerNormIgnoringContext(self.out_features)
+        else:
+            error_msg = f"Got '{cond_mode=}'. Need 'AdaLN', 'FiLM', 'concat', or None"
+            raise NotImplementedError(error_msg)
+
     def forward(self, x: torch.Tensor, ctx: list[torch.Tensor]) -> torch.Tensor:
-        x = super().forward(x, ctx)
+        x = super().forward(x, ctx)  # Pass through linear layer, before normalizing
         return self.act_fn(self.norm(x, ctx))
 
     def __repr__(self):
-        if self.norm_mode is None:
-            norm_mode = "Identity"
-        elif self.norm_mode == "ln":
-            norm_mode = "LayerNorm"
-        elif self.norm_mode == "cln":
-            norm_mode = "ConcatLayerNorm"
-        elif self.norm_mode == "aln":
-            norm_mode = "AdaptiveLayerNorm"
-        elif self.norm_mode == "FiLM":
-            norm_mode = "FiLM"
+        if self.cond_mode == "AdaLN":
+            cond_mode = "AdaptiveLayerNorm"
+        elif self.cond_mode == "FiLM":
+            cond_mode = "FiLM"
+        elif self.cond_mode == "concat" or self.cond_mode is None:
+            cond_mode = "LayerNorm"
         else:
-            norm_mode = "UnknownNorm"
-        return f"{norm_mode}(in_features={self.in_features}, \
+            cond_mode = ""
+
+        return f"{cond_mode}(in_features={self.in_features}, \
         out_features={self.out_features}, \
         ctx_dim={self.ctx_dim}, \
         bias={self.bias is not None}, \
@@ -210,52 +167,51 @@ def mlp(
     in_dim: int,
     mlp_dims: Union[int, list[int]],
     out_dim: int,
+    cond_mode: Optional[str],
     ctx_dim: int = 0,
-    condition_layer: Optional[str] = None,  # None, "first", or "all"
-    norm_mode: Optional[str] = None,  # None, "ln", "cln", "aln", or "FiLM"
 ):
     """
-    MLP with Mish activations and optionally normalization in hidden layer.
+    MLP with Mish activations, and different options to condition on context:
+    - "AdaLN": Learn bias and gain of LayerNorm from context.
+    - "FiLM": Learn bias and gain of non-normalizing affine transform from context.
+    - "concatFirst": Concatenate context to the input of the first layer only.
+    - "concatAll": Concatenate context to the input of all layers.
+    - None: Don't let the context be used in any way by this MLP.
 
     Adapted from https://github.com/tdmpc2/tdmpc2-eval/blob/main/helper.py
-
-    If ctx_dim>0, the specified layers get context-conditioned by concatenation:
-    - The in_dim increases by ctx_dim, if condition in ["first", "all"].
-    - All mlp_dims increase by ctx_dim, if condition == "all".
     """
     if isinstance(mlp_dims, int):
         mlp_dims = [mlp_dims]
-
     dims = [int(in_dim)] + mlp_dims + [int(out_dim)]
     mlp = nn.ModuleList()
 
+    if cond_mode == "concatFirst":
+        cond_mode_1 = "concat"
+        cond_mode_n = None
+    elif cond_mode == "concatAll":
+        cond_mode_1 = "concat"
+        cond_mode_n = "concat"
+    else:
+        cond_mode_1 = cond_mode
+        cond_mode_n = cond_mode
+
     # Add input layer
     mlp.append(
-        NormedContextLinear(
-            dims[0],
-            dims[1],
-            ctx_dim=ctx_dim if condition_layer in ["first", "all"] else 0,
-            norm_mode=norm_mode,
-        )
+        NormedContextLinear(dims[0], dims[1], cond_mode=cond_mode_1, ctx_dim=ctx_dim)
     )
-
     # Add hidden layer(s)
     for i in range(1, len(dims) - 2):
         mlp.append(
             NormedContextLinear(
-                dims[i],
-                dims[i + 1],
-                ctx_dim=ctx_dim if condition_layer == "all" else 0,
-                norm_mode=norm_mode,
+                dims[i], dims[i + 1], cond_mode=cond_mode_n, ctx_dim=ctx_dim
             )
         )
-
-    # Add output layer
+    # Add output layer; non-normalized but can be context-conditioned through concat
     mlp.append(
         ContextLinear(
             in_dim=dims[-2],
             out_dim=dims[-1],
-            ctx_dim=ctx_dim if condition_layer == "all" else 0,
+            ctx_dim=ctx_dim if cond_mode_n == "concat" else 0,
         )
     )
 

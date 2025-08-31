@@ -34,10 +34,8 @@ class iQRLConfig:
     condition_actor: bool = True
     condition_critic: bool = True
     condition_reward: bool = True
-    """When conditioning a component, concatenate context to which layer's input?"""
-    condition_layer: str = "first"  # or "all"
-    """(How to) condition a layer? "cln" and "FiLM" use body and task context while None, "ln", and "aln" don't"""
-    norm_mode: Optional[str] = "cln"  # Default: LayerNorm with concatenated context
+    """How to condition? Options are: "AdaLN", "FiLM", "concatFirst", "concatAll", None"""
+    cond_mode: Optional[str] = "AdaLN"  # Not to be confused with "AdaNorm" by Xu (2019)
     """MLP dims for actor/critic/dynamics"""
     mlp_dims: List[int] = field(default_factory=lambda: [512, 512])
     """Learning rate for actor/critic"""
@@ -169,8 +167,7 @@ class Actor(nn.Module):
             mlp_dims=cfg.mlp_dims,
             out_dim=act_dim,
             ctx_dim=ctx_dim,
-            condition_layer=cfg.condition_layer if cfg.condition_actor else None,
-            norm_mode=cfg.norm_mode,
+            cond_mode=cfg.cond_mode,
         )
 
     def forward(self, z: torch.Tensor, ctx: list[torch.Tensor]) -> torch.Tensor:
@@ -192,8 +189,7 @@ class Critic(nn.Module):
                 mlp_dims=cfg.mlp_dims,
                 out_dim=1 if self.cfg.Q_and_rew_loss == "mse" else cfg.num_bins,
                 ctx_dim=ctx_dim,
-                condition_layer=cfg.condition_layer if cfg.condition_critic else None,
-                norm_mode=cfg.norm_mode,
+                cond_mode=cfg.cond_mode,
             ).to(cfg.device)
             for _ in range(cfg.num_critics)
         ]
@@ -274,8 +270,7 @@ class Encoder(nn.Module):
                 mlp_dims=cfg.enc_mlp_dims,
                 out_dim=latent_obs_dim,
                 ctx_dim=ctx_dim,
-                condition_layer=cfg.condition_layer if cfg.condition_encoder else None,
-                norm_mode=cfg.norm_mode,
+                cond_mode=cfg.cond_mode,
             )
         if cfg.use_tar_enc:
             self._encoder_tar = copy.deepcopy(self._encoder).requires_grad_(False)
@@ -292,8 +287,7 @@ class Encoder(nn.Module):
             mlp_dims=cfg.mlp_dims,
             out_dim=trans_out_dim,
             ctx_dim=ctx_dim,
-            condition_layer=cfg.condition_layer if cfg.condition_dynamics else None,
-            norm_mode=cfg.norm_mode,
+            cond_mode=cfg.cond_mode,
         )
 
         ##### Init optional reward model #####
@@ -303,8 +297,7 @@ class Encoder(nn.Module):
                 mlp_dims=cfg.mlp_dims,
                 out_dim=1 if cfg.Q_and_rew_loss == "mse" else cfg.num_bins,
                 ctx_dim=ctx_dim,
-                condition_layer=cfg.condition_layer if cfg.condition_reward else None,
-                norm_mode=cfg.norm_mode,
+                cond_mode=cfg.cond_mode,
             )
 
     def get_context(self, obs: TensorDictBase) -> list[torch.Tensor]:

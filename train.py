@@ -135,7 +135,6 @@ def train(cfg: TrainConfig):
     logging.basicConfig(level=logging.DEBUG)
     logger = logging.getLogger(__name__)
 
-    assert cfg.agent.condition_layer in ["first", "all"], "Unknown condition_layer"
     assert cfg.agent.Q_and_rew_loss in ["mse", "soft-ce"], "Unsupported Q_and_rew_loss"
     assert cfg.agent.obs_types == ["state"], "Only obs_types=['state'] is supported"
     assert cfg.agent.enc_update_freq == 1, "enc_update_freq!=1 currently not supported"
