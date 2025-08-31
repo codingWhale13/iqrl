@@ -67,7 +67,7 @@ class iQRLConfig:
 
     """ENCODER CONFIG"""
     """Size of latent state space"""
-    latent_dim: int = 512
+    latent_dim: int = 1024
     """Size of latent action space is the largest action dim multiplied by this"""
     latent_action_dim_factor: int = 1
     """Horizon used for representation learning"""
@@ -91,7 +91,7 @@ class iQRLConfig:
     """Use temporal consistency loss for representation learning"""
     use_tc_loss: bool = True
     """Use reward prediction for representation learning"""
-    use_rew_loss: bool = False
+    use_rew_loss: bool = True
     """Reward coefficient"""
     reward_coef: float = 1.0
     """Consistency coefficient"""
@@ -101,7 +101,7 @@ class iQRLConfig:
     """Value coefficient (only relevant when update_Q_with_rep=True)"""
     value_coef: float = 1.0
     """Use "mse" or "soft-ce" (soft cross-entropy) in critic and reward updates"""
-    Q_and_rew_loss: str = "mse"
+    Q_and_rew_loss: str = "soft-ce"
     """Number of bins and value range (only used if Q_and_rew_loss="soft-ce")"""
     num_bins: int = 101
     vmin: float = -10.0
@@ -111,15 +111,15 @@ class iQRLConfig:
     use_representation_learning: bool = True
 
     """Which loss function to use for consistency loss?"""
-    consistency_loss: str = "cosine"  # "cross-entropy", "mse", "cosine"
+    consistency_loss: str = "cross-entropy"  # "cross-entropy", "mse", "cosine"
     """Predict logits with dynamics NN or use cosine/mse between pred and codebook?  (only for cross-entropy)"""
     ce_logits_mode: str = "standard"  # "standard", cosine", "mse"
     """How to get propagate the state dist. during training (only for cross-entropy)"""
     unc_prop_mode: str = "sample"  # Literal["sample", "sample-no-grad", "weighted-avg"]
     """Flag to turn FSQ on/off"""
     use_fsq: bool = True
-    """FSQ levels - setting as [8,8] corresponds to a codebook of size 8*8=62=2^8"""
-    fsq_levels: List[int] = field(default_factory=lambda: [8, 8])
+    """FSQ levels - setting as [5,3] corresponds to a codebook of size 5*3=15"""
+    fsq_levels: List[int] = field(default_factory=lambda: [5, 3])
 
     """EXPLORATION NOISE SCHEDULE"""
     """Initial variance"""
